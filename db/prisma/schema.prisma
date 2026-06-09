@@ -1,0 +1,271 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [uuidOssp(map: "uuid-ossp"), vector]
+}
+
+model Card {
+  id             String   @id @db.VarChar(64)
+  bankName       String   @db.VarChar(64)
+  cardName       String   @db.VarChar(128)
+  cardTier       String   @db.VarChar(32)
+  network        String   @db.VarChar(16)
+  annualFeeInr   Int      @default(0)
+  baseEarnRate   Decimal  @db.Decimal(6, 2)
+  currencyName   String   @db.VarChar(32)
+  imageAssetUrl  String?  @db.Text
+  cardPageUrl    String   @db.Text
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamptz
+  updatedAt      DateTime @updatedAt @db.Timestamptz
+  benefits        Benefit[]
+  transferPartners TransferPartner[]
+  tncVersions     TncVersion[]
+  userCards       UserCard[]
+  scraperRuns     ScraperRun[]
+  benefitEmbeddings BenefitEmbedding[]
+  @@map("cards")
+}
+
+model Benefit {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cardId        String    @db.VarChar(64)
+  category      String    @db.VarChar(64)
+  sortOrder     Int       @default(0)
+  benefitName   String    @db.VarChar(256)
+  description   String    @db.Text
+  benefitType   String    @db.VarChar(32)
+  sourceUrl     String    @db.Text
+  verified      Boolean   @default(true)
+  contentHash   String    @db.VarChar(64)
+  effectiveDate DateTime? @db.Date
+  tncUpdatedAt  DateTime? @db.Timestamptz
+  isEmbedded    Boolean   @default(false)
+  createdAt     DateTime  @default(now()) @db.Timestamptz
+  updatedAt     DateTime  @updatedAt @db.Timestamptz
+  card              Card               @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  benefitEmbeddings BenefitEmbedding[]
+  @@index([cardId])
+  @@index([cardId, category], name: "idx_benefits_card_category")
+  @@index([benefitType])
+  @@map("benefits")
+}
+
+model TransferPartner {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cardId              String    @db.VarChar(64)
+  partnerName         String    @db.VarChar(128)
+  partnerProgramme    String?   @db.VarChar(128)
+  partnerType         String    @db.VarChar(32)
+  sourcePoints        Int
+  destinationPoints   Int
+  minimumTransfer     Int       @default(1000)
+  processingDaysMin   Int       @default(3)
+  processingDaysMax   Int       @default(5)
+  reversible          Boolean   @default(false)
+  effectiveValueInr   Decimal?  @db.Decimal(8, 4)
+  sourceUrl           String    @db.Text
+  isActive            Boolean   @default(true)
+  contentHash         String    @db.VarChar(64)
+  effectiveDate       DateTime? @db.Date
+  createdAt           DateTime  @default(now()) @db.Timestamptz
+  updatedAt           DateTime  @updatedAt @db.Timestamptz
+  card               Card                @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  redemptionHistory  RedemptionHistory[]
+  @@index([cardId])
+  @@index([partnerType])
+  @@map("transfer_partners")
+}
+
+model TncVersion {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cardId           String    @db.VarChar(64)
+  pdfUrl           String    @db.Text
+  pdfHash          String    @db.VarChar(64)
+  effectiveDate    DateTime  @db.Date
+  detectedAt       DateTime  @default(now()) @db.Timestamptz
+  ingestionStatus  String    @default("pending") @db.VarChar(32)
+  ingestedAt       DateTime? @db.Timestamptz
+  isCurrent        Boolean   @default(false)
+  card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  @@index([cardId, isCurrent], name: "idx_tnc_card_current")
+  @@map("tnc_versions")
+}
+
+model User {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String   @db.VarChar(128)
+  email     String   @unique @db.VarChar(256)
+  phone     String?  @db.VarChar(16)
+  city      String?  @db.VarChar(64)
+  state     String?  @db.VarChar(64)
+  country   String   @default("India") @db.VarChar(64)
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+  userCards            UserCard[]
+  preferences          Preference?
+  redemptionHistory    RedemptionHistory[]
+  recommendationEvents RecommendationEvent[]
+  @@map("users")
+}
+
+model UserCard {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId             String    @db.Uuid
+  cardId             String    @db.VarChar(64)
+  cardNumberMasked   String    @db.VarChar(20)
+  expiryMonth        Int       @db.SmallInt
+  expiryYear         Int       @db.SmallInt
+  currentPoints      Int       @default(0)
+  nextExpiryPoints   Int?
+  nextExpiryDate     DateTime? @db.Date
+  tierLevel          String    @default("standard") @db.VarChar(32)
+  annualFeePaid      Boolean   @default(false)
+  annualFeePaidDate  DateTime? @db.Date
+  isPrimary          Boolean   @default(false)
+  isActive           Boolean   @default(true)
+  joinedAt           DateTime  @db.Date
+  createdAt          DateTime  @default(now()) @db.Timestamptz
+  updatedAt          DateTime  @updatedAt @db.Timestamptz
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  card              Card                @relation(fields: [cardId], references: [id])
+  pointsLedger      PointsLedger[]
+  redemptionHistory RedemptionHistory[]
+  @@unique([userId, cardId])
+  @@index([userId])
+  @@index([cardId])
+  @@map("user_cards")
+}
+
+model PointsLedger {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userCardId      String    @db.Uuid
+  transactionType String    @db.VarChar(32)
+  pointsDelta     Int
+  balanceAfter    Int
+  description     String?   @db.Text
+  referenceId     String?   @db.Uuid
+  expiryDate      DateTime? @db.Date
+  createdAt       DateTime  @default(now()) @db.Timestamptz
+  userCard UserCard @relation(fields: [userCardId], references: [id], onDelete: Cascade)
+  @@index([userCardId])
+  @@index([createdAt(sort: Desc)])
+  @@index([expiryDate])
+  @@map("points_ledger")
+}
+
+model Preference {
+  id                         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                     String    @unique @db.Uuid
+  destinationType            String?   @db.VarChar(32)
+  tripLength                 String?   @db.VarChar(16)
+  regionPreference           String?   @db.VarChar(32)
+  accommodationTier          String?   @db.VarChar(16)
+  flightPreference           String?   @db.VarChar(16)
+  departurePreference        String?   @db.VarChar(16)
+  travelWeight               Decimal   @default(0.400) @db.Decimal(4, 3)
+  diningWeight               Decimal   @default(0.200) @db.Decimal(4, 3)
+  shoppingWeight             Decimal   @default(0.200) @db.Decimal(4, 3)
+  cashbackWeight             Decimal   @default(0.100) @db.Decimal(4, 3)
+  experiencesWeight          Decimal   @default(0.100) @db.Decimal(4, 3)
+  valueSensitivityThreshold  Decimal?  @db.Decimal(6, 4)
+  totalRedemptions           Int       @default(0)
+  totalDismissals            Int       @default(0)
+  updatedAt                  DateTime  @updatedAt @db.Timestamptz
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@map("preferences")
+}
+
+model RedemptionHistory {
+  id                     String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                 String    @db.Uuid
+  userCardId             String    @db.Uuid
+  transactionId          String    @unique @db.VarChar(64)
+  status                 String    @db.VarChar(32)
+  optionType             String    @db.VarChar(32)
+  optionLabel            String    @db.Text
+  pointsUsed             Int       @default(0)
+  cashUsedInr            Decimal   @default(0) @db.Decimal(10, 2)
+  valueInr               Decimal   @db.Decimal(10, 2)
+  partnerName            String?   @db.VarChar(128)
+  transferPartnerId      String?   @db.Uuid
+  confirmationReference  String?   @db.Text
+  rollbackReason         String?   @db.Text
+  sourceUrls             Json?
+  createdAt              DateTime  @default(now()) @db.Timestamptz
+  completedAt            DateTime? @db.Timestamptz
+  user            User             @relation(fields: [userId], references: [id])
+  userCard        UserCard         @relation(fields: [userCardId], references: [id])
+  transferPartner TransferPartner? @relation(fields: [transferPartnerId], references: [id])
+  @@index([userId])
+  @@index([status])
+  @@index([transactionId])
+  @@map("redemption_history")
+}
+
+model RecommendationEvent {
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId               String   @db.Uuid
+  sessionId            String   @db.VarChar(64)
+  recommendationRank   Int      @db.SmallInt
+  optionType           String   @db.VarChar(32)
+  optionLabel          String   @db.Text
+  scoreFinancial       Decimal? @db.Decimal(5, 2)
+  scoreLifestyle       Decimal? @db.Decimal(5, 2)
+  scoreRedemptionProb  Decimal? @db.Decimal(5, 2)
+  scoreExpiryRisk      Decimal? @db.Decimal(5, 2)
+  scoreFlexibility     Decimal? @db.Decimal(5, 2)
+  scoreTotal           Decimal? @db.Decimal(5, 2)
+  weightFinancial      Decimal? @db.Decimal(4, 3)
+  weightLifestyle      Decimal? @db.Decimal(4, 3)
+  weightRedemptionProb Decimal? @db.Decimal(4, 3)
+  weightExpiryRisk     Decimal? @db.Decimal(4, 3)
+  weightFlexibility    Decimal? @db.Decimal(4, 3)
+  userAction           String?  @db.VarChar(32)
+  sourceUrls           Json?
+  createdAt            DateTime @default(now()) @db.Timestamptz
+  user User @relation(fields: [userId], references: [id])
+  @@index([userId])
+  @@index([userAction])
+  @@map("recommendation_events")
+}
+
+model BenefitEmbedding {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  benefitId     String    @db.Uuid
+  cardId        String    @db.VarChar(64)
+  category      String    @db.VarChar(64)
+  chunkText     String    @db.Text
+  sourceUrl     String    @db.Text
+  contentHash   String    @db.VarChar(64)
+  effectiveDate DateTime? @db.Date
+  createdAt     DateTime  @default(now()) @db.Timestamptz
+  benefit Benefit @relation(fields: [benefitId], references: [id], onDelete: Cascade)
+  card    Card    @relation(fields: [cardId], references: [id])
+  @@index([cardId])
+  @@map("benefit_embeddings")
+}
+
+model ScraperRun {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cardId             String    @db.VarChar(64)
+  runType            String    @db.VarChar(32)
+  status             String    @db.VarChar(32)
+  previousHash       String?   @db.VarChar(64)
+  newHash            String?   @db.VarChar(64)
+  pagesScraped       Int       @default(0)
+  benefitsUpserted   Int       @default(0)
+  errorMessage       String?   @db.Text
+  triggeredBy        String    @default("schedule") @db.VarChar(32)
+  startedAt          DateTime  @default(now()) @db.Timestamptz
+  completedAt        DateTime? @db.Timestamptz
+  card Card @relation(fields: [cardId], references: [id])
+  @@index([cardId, startedAt(sort: Desc)], name: "idx_scraper_card_started")
+  @@map("scraper_runs")
+}
