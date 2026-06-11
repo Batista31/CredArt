@@ -12,18 +12,18 @@ datasource db {
 
 model Card {
   id             String   @id @db.VarChar(64)
-  bankName       String   @db.VarChar(64)
-  cardName       String   @db.VarChar(128)
-  cardTier       String   @db.VarChar(32)
+  bankName       String   @map("bank_name") @db.VarChar(64)
+  cardName       String   @map("card_name") @db.VarChar(128)
+  cardTier       String   @map("card_tier") @db.VarChar(32)
   network        String   @db.VarChar(16)
-  annualFeeInr   Int      @default(0)
-  baseEarnRate   Decimal  @db.Decimal(6, 2)
-  currencyName   String   @db.VarChar(32)
-  imageAssetUrl  String?  @db.Text
-  cardPageUrl    String   @db.Text
-  isActive       Boolean  @default(true)
-  createdAt      DateTime @default(now()) @db.Timestamptz
-  updatedAt      DateTime @updatedAt @db.Timestamptz
+  annualFeeInr   Int      @default(0) @map("annual_fee_inr")
+  baseEarnRate   Decimal  @map("base_earn_rate") @db.Decimal(6, 2)
+  currencyName   String   @map("currency_name") @db.VarChar(32)
+  imageAssetUrl  String?  @map("image_asset_url") @db.Text
+  cardPageUrl    String   @map("card_page_url") @db.Text
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz
   benefits        Benefit[]
   transferPartners TransferPartner[]
   tncVersions     TncVersion[]
@@ -35,20 +35,20 @@ model Card {
 
 model Benefit {
   id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  cardId        String    @db.VarChar(64)
+  cardId        String    @map("card_id") @db.VarChar(64)
   category      String    @db.VarChar(64)
-  sortOrder     Int       @default(0)
-  benefitName   String    @db.VarChar(256)
+  sortOrder     Int       @default(0) @map("sort_order")
+  benefitName   String    @map("benefit_name") @db.VarChar(256)
   description   String    @db.Text
-  benefitType   String    @db.VarChar(32)
-  sourceUrl     String    @db.Text
+  benefitType   String    @map("benefit_type") @db.VarChar(32)
+  sourceUrl     String    @map("source_url") @db.Text
   verified      Boolean   @default(true)
-  contentHash   String    @db.VarChar(64)
-  effectiveDate DateTime? @db.Date
-  tncUpdatedAt  DateTime? @db.Timestamptz
-  isEmbedded    Boolean   @default(false)
-  createdAt     DateTime  @default(now()) @db.Timestamptz
-  updatedAt     DateTime  @updatedAt @db.Timestamptz
+  contentHash   String    @map("content_hash") @db.VarChar(64)
+  effectiveDate DateTime? @map("effective_date") @db.Date
+  tncUpdatedAt  DateTime? @map("tnc_updated_at") @db.Timestamptz
+  isEmbedded    Boolean   @default(false) @map("is_embedded")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz
   card              Card               @relation(fields: [cardId], references: [id], onDelete: Cascade)
   benefitEmbeddings BenefitEmbedding[]
   @@index([cardId])
@@ -59,23 +59,23 @@ model Benefit {
 
 model TransferPartner {
   id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  cardId              String    @db.VarChar(64)
-  partnerName         String    @db.VarChar(128)
-  partnerProgramme    String?   @db.VarChar(128)
-  partnerType         String    @db.VarChar(32)
-  sourcePoints        Int
-  destinationPoints   Int
-  minimumTransfer     Int       @default(1000)
-  processingDaysMin   Int       @default(3)
-  processingDaysMax   Int       @default(5)
+  cardId              String    @map("card_id") @db.VarChar(64)
+  partnerName         String    @map("partner_name") @db.VarChar(128)
+  partnerProgramme    String?   @map("partner_programme") @db.VarChar(128)
+  partnerType         String    @map("partner_type") @db.VarChar(32)
+  sourcePoints        Int       @map("source_points")
+  destinationPoints   Int       @map("destination_points")
+  minimumTransfer     Int       @default(1000) @map("minimum_transfer")
+  processingDaysMin   Int       @default(3) @map("processing_days_min")
+  processingDaysMax   Int       @default(5) @map("processing_days_max")
   reversible          Boolean   @default(false)
-  effectiveValueInr   Decimal?  @db.Decimal(8, 4)
-  sourceUrl           String    @db.Text
-  isActive            Boolean   @default(true)
-  contentHash         String    @db.VarChar(64)
-  effectiveDate       DateTime? @db.Date
-  createdAt           DateTime  @default(now()) @db.Timestamptz
-  updatedAt           DateTime  @updatedAt @db.Timestamptz
+  effectiveValueInr   Decimal?  @map("effective_value_inr") @db.Decimal(8, 4)
+  sourceUrl           String    @map("source_url") @db.Text
+  isActive            Boolean   @default(true) @map("is_active")
+  contentHash         String    @map("content_hash") @db.VarChar(64)
+  effectiveDate       DateTime? @map("effective_date") @db.Date
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz
   card               Card                @relation(fields: [cardId], references: [id], onDelete: Cascade)
   redemptionHistory  RedemptionHistory[]
   @@index([cardId])
@@ -85,14 +85,14 @@ model TransferPartner {
 
 model TncVersion {
   id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  cardId           String    @db.VarChar(64)
-  pdfUrl           String    @db.Text
-  pdfHash          String    @db.VarChar(64)
-  effectiveDate    DateTime  @db.Date
-  detectedAt       DateTime  @default(now()) @db.Timestamptz
-  ingestionStatus  String    @default("pending") @db.VarChar(32)
-  ingestedAt       DateTime? @db.Timestamptz
-  isCurrent        Boolean   @default(false)
+  cardId           String    @map("card_id") @db.VarChar(64)
+  pdfUrl           String    @map("pdf_url") @db.Text
+  pdfHash          String    @map("pdf_hash") @db.VarChar(64)
+  effectiveDate    DateTime  @map("effective_date") @db.Date
+  detectedAt       DateTime  @default(now()) @map("detected_at") @db.Timestamptz
+  ingestionStatus  String    @default("pending") @map("ingestion_status") @db.VarChar(32)
+  ingestedAt       DateTime? @map("ingested_at") @db.Timestamptz
+  isCurrent        Boolean   @default(false) @map("is_current")
   card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
   @@index([cardId, isCurrent], name: "idx_tnc_card_current")
   @@map("tnc_versions")
@@ -106,8 +106,8 @@ model User {
   city      String?  @db.VarChar(64)
   state     String?  @db.VarChar(64)
   country   String   @default("India") @db.VarChar(64)
-  createdAt DateTime @default(now()) @db.Timestamptz
-  updatedAt DateTime @updatedAt @db.Timestamptz
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
   userCards            UserCard[]
   preferences          Preference?
   redemptionHistory    RedemptionHistory[]
@@ -117,22 +117,22 @@ model User {
 
 model UserCard {
   id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId             String    @db.Uuid
-  cardId             String    @db.VarChar(64)
-  cardNumberMasked   String    @db.VarChar(20)
-  expiryMonth        Int       @db.SmallInt
-  expiryYear         Int       @db.SmallInt
-  currentPoints      Int       @default(0)
-  nextExpiryPoints   Int?
-  nextExpiryDate     DateTime? @db.Date
-  tierLevel          String    @default("standard") @db.VarChar(32)
-  annualFeePaid      Boolean   @default(false)
-  annualFeePaidDate  DateTime? @db.Date
-  isPrimary          Boolean   @default(false)
-  isActive           Boolean   @default(true)
-  joinedAt           DateTime  @db.Date
-  createdAt          DateTime  @default(now()) @db.Timestamptz
-  updatedAt          DateTime  @updatedAt @db.Timestamptz
+  userId             String    @map("user_id") @db.Uuid
+  cardId             String    @map("card_id") @db.VarChar(64)
+  cardNumberMasked   String    @map("card_number_masked") @db.VarChar(20)
+  expiryMonth        Int       @map("expiry_month") @db.SmallInt
+  expiryYear         Int       @map("expiry_year") @db.SmallInt
+  currentPoints      Int       @default(0) @map("current_points")
+  nextExpiryPoints   Int?      @map("next_expiry_points")
+  nextExpiryDate     DateTime? @map("next_expiry_date") @db.Date
+  tierLevel          String    @default("standard") @map("tier_level") @db.VarChar(32)
+  annualFeePaid      Boolean   @default(false) @map("annual_fee_paid")
+  annualFeePaidDate  DateTime? @map("annual_fee_paid_date") @db.Date
+  isPrimary          Boolean   @default(false) @map("is_primary")
+  isActive           Boolean   @default(true) @map("is_active")
+  joinedAt           DateTime  @map("joined_at") @db.Date
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz
   user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   card              Card                @relation(fields: [cardId], references: [id])
   pointsLedger      PointsLedger[]
@@ -145,14 +145,14 @@ model UserCard {
 
 model PointsLedger {
   id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userCardId      String    @db.Uuid
-  transactionType String    @db.VarChar(32)
-  pointsDelta     Int
-  balanceAfter    Int
+  userCardId      String    @map("user_card_id") @db.Uuid
+  transactionType String    @map("transaction_type") @db.VarChar(32)
+  pointsDelta     Int       @map("points_delta")
+  balanceAfter    Int       @map("balance_after")
   description     String?   @db.Text
-  referenceId     String?   @db.Uuid
-  expiryDate      DateTime? @db.Date
-  createdAt       DateTime  @default(now()) @db.Timestamptz
+  referenceId     String?   @map("reference_id") @db.Uuid
+  expiryDate      DateTime? @map("expiry_date") @db.Date
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
   userCard UserCard @relation(fields: [userCardId], references: [id], onDelete: Cascade)
   @@index([userCardId])
   @@index([createdAt(sort: Desc)])
@@ -162,44 +162,44 @@ model PointsLedger {
 
 model Preference {
   id                         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId                     String    @unique @db.Uuid
-  destinationType            String?   @db.VarChar(32)
-  tripLength                 String?   @db.VarChar(16)
-  regionPreference           String?   @db.VarChar(32)
-  accommodationTier          String?   @db.VarChar(16)
-  flightPreference           String?   @db.VarChar(16)
-  departurePreference        String?   @db.VarChar(16)
-  travelWeight               Decimal   @default(0.400) @db.Decimal(4, 3)
-  diningWeight               Decimal   @default(0.200) @db.Decimal(4, 3)
-  shoppingWeight             Decimal   @default(0.200) @db.Decimal(4, 3)
-  cashbackWeight             Decimal   @default(0.100) @db.Decimal(4, 3)
-  experiencesWeight          Decimal   @default(0.100) @db.Decimal(4, 3)
-  valueSensitivityThreshold  Decimal?  @db.Decimal(6, 4)
-  totalRedemptions           Int       @default(0)
-  totalDismissals            Int       @default(0)
-  updatedAt                  DateTime  @updatedAt @db.Timestamptz
+  userId                     String    @unique @map("user_id") @db.Uuid
+  destinationType            String?   @map("destination_type") @db.VarChar(32)
+  tripLength                 String?   @map("trip_length") @db.VarChar(16)
+  regionPreference           String?   @map("region_preference") @db.VarChar(32)
+  accommodationTier          String?   @map("accommodation_tier") @db.VarChar(16)
+  flightPreference           String?   @map("flight_preference") @db.VarChar(16)
+  departurePreference        String?   @map("departure_preference") @db.VarChar(16)
+  travelWeight               Decimal   @default(0.400) @map("travel_weight") @db.Decimal(4, 3)
+  diningWeight               Decimal   @default(0.200) @map("dining_weight") @db.Decimal(4, 3)
+  shoppingWeight             Decimal   @default(0.200) @map("shopping_weight") @db.Decimal(4, 3)
+  cashbackWeight             Decimal   @default(0.100) @map("cashback_weight") @db.Decimal(4, 3)
+  experiencesWeight          Decimal   @default(0.100) @map("experiences_weight") @db.Decimal(4, 3)
+  valueSensitivityThreshold  Decimal?  @map("value_sensitivity_threshold") @db.Decimal(6, 4)
+  totalRedemptions           Int       @default(0) @map("total_redemptions")
+  totalDismissals            Int       @default(0) @map("total_dismissals")
+  updatedAt                  DateTime  @updatedAt @map("updated_at") @db.Timestamptz
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   @@map("preferences")
 }
 
 model RedemptionHistory {
   id                     String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId                 String    @db.Uuid
-  userCardId             String    @db.Uuid
-  transactionId          String    @unique @db.VarChar(64)
+  userId                 String    @map("user_id") @db.Uuid
+  userCardId             String    @map("user_card_id") @db.Uuid
+  transactionId          String    @unique @map("transaction_id") @db.VarChar(64)
   status                 String    @db.VarChar(32)
-  optionType             String    @db.VarChar(32)
-  optionLabel            String    @db.Text
-  pointsUsed             Int       @default(0)
-  cashUsedInr            Decimal   @default(0) @db.Decimal(10, 2)
-  valueInr               Decimal   @db.Decimal(10, 2)
-  partnerName            String?   @db.VarChar(128)
-  transferPartnerId      String?   @db.Uuid
-  confirmationReference  String?   @db.Text
-  rollbackReason         String?   @db.Text
-  sourceUrls             Json?
-  createdAt              DateTime  @default(now()) @db.Timestamptz
-  completedAt            DateTime? @db.Timestamptz
+  optionType             String    @map("option_type") @db.VarChar(32)
+  optionLabel            String    @map("option_label") @db.Text
+  pointsUsed             Int       @default(0) @map("points_used")
+  cashUsedInr            Decimal   @default(0) @map("cash_used_inr") @db.Decimal(10, 2)
+  valueInr               Decimal   @map("value_inr") @db.Decimal(10, 2)
+  partnerName            String?   @map("partner_name") @db.VarChar(128)
+  transferPartnerId      String?   @map("transfer_partner_id") @db.Uuid
+  confirmationReference  String?   @map("confirmation_reference") @db.Text
+  rollbackReason         String?   @map("rollback_reason") @db.Text
+  sourceUrls             Json?     @map("source_urls")
+  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  completedAt            DateTime? @map("completed_at") @db.Timestamptz
   user            User             @relation(fields: [userId], references: [id])
   userCard        UserCard         @relation(fields: [userCardId], references: [id])
   transferPartner TransferPartner? @relation(fields: [transferPartnerId], references: [id])
@@ -211,25 +211,25 @@ model RedemptionHistory {
 
 model RecommendationEvent {
   id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId               String   @db.Uuid
-  sessionId            String   @db.VarChar(64)
-  recommendationRank   Int      @db.SmallInt
-  optionType           String   @db.VarChar(32)
-  optionLabel          String   @db.Text
-  scoreFinancial       Decimal? @db.Decimal(5, 2)
-  scoreLifestyle       Decimal? @db.Decimal(5, 2)
-  scoreRedemptionProb  Decimal? @db.Decimal(5, 2)
-  scoreExpiryRisk      Decimal? @db.Decimal(5, 2)
-  scoreFlexibility     Decimal? @db.Decimal(5, 2)
-  scoreTotal           Decimal? @db.Decimal(5, 2)
-  weightFinancial      Decimal? @db.Decimal(4, 3)
-  weightLifestyle      Decimal? @db.Decimal(4, 3)
-  weightRedemptionProb Decimal? @db.Decimal(4, 3)
-  weightExpiryRisk     Decimal? @db.Decimal(4, 3)
-  weightFlexibility    Decimal? @db.Decimal(4, 3)
-  userAction           String?  @db.VarChar(32)
-  sourceUrls           Json?
-  createdAt            DateTime @default(now()) @db.Timestamptz
+  userId               String   @map("user_id") @db.Uuid
+  sessionId            String   @map("session_id") @db.VarChar(64)
+  recommendationRank   Int      @map("recommendation_rank") @db.SmallInt
+  optionType           String   @map("option_type") @db.VarChar(32)
+  optionLabel          String   @map("option_label") @db.Text
+  scoreFinancial       Decimal? @map("score_financial") @db.Decimal(5, 2)
+  scoreLifestyle       Decimal? @map("score_lifestyle") @db.Decimal(5, 2)
+  scoreRedemptionProb  Decimal? @map("score_redemption_prob") @db.Decimal(5, 2)
+  scoreExpiryRisk      Decimal? @map("score_expiry_risk") @db.Decimal(5, 2)
+  scoreFlexibility     Decimal? @map("score_flexibility") @db.Decimal(5, 2)
+  scoreTotal           Decimal? @map("score_total") @db.Decimal(5, 2)
+  weightFinancial      Decimal? @map("weight_financial") @db.Decimal(4, 3)
+  weightLifestyle      Decimal? @map("weight_lifestyle") @db.Decimal(4, 3)
+  weightRedemptionProb Decimal? @map("weight_redemption_prob") @db.Decimal(4, 3)
+  weightExpiryRisk     Decimal? @map("weight_expiry_risk") @db.Decimal(4, 3)
+  weightFlexibility    Decimal? @map("weight_flexibility") @db.Decimal(4, 3)
+  userAction           String?  @map("user_action") @db.VarChar(32)
+  sourceUrls           Json?    @map("source_urls")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz
   user User @relation(fields: [userId], references: [id])
   @@index([userId])
   @@index([userAction])
@@ -238,14 +238,14 @@ model RecommendationEvent {
 
 model BenefitEmbedding {
   id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  benefitId     String    @db.Uuid
-  cardId        String    @db.VarChar(64)
+  benefitId     String    @map("benefit_id") @db.Uuid
+  cardId        String    @map("card_id") @db.VarChar(64)
   category      String    @db.VarChar(64)
-  chunkText     String    @db.Text
-  sourceUrl     String    @db.Text
-  contentHash   String    @db.VarChar(64)
-  effectiveDate DateTime? @db.Date
-  createdAt     DateTime  @default(now()) @db.Timestamptz
+  chunkText     String    @map("chunk_text") @db.Text
+  sourceUrl     String    @map("source_url") @db.Text
+  contentHash   String    @map("content_hash") @db.VarChar(64)
+  effectiveDate DateTime? @map("effective_date") @db.Date
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
   benefit Benefit @relation(fields: [benefitId], references: [id], onDelete: Cascade)
   card    Card    @relation(fields: [cardId], references: [id])
   @@index([cardId])
@@ -254,17 +254,17 @@ model BenefitEmbedding {
 
 model ScraperRun {
   id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  cardId             String    @db.VarChar(64)
-  runType            String    @db.VarChar(32)
+  cardId             String    @map("card_id") @db.VarChar(64)
+  runType            String    @map("run_type") @db.VarChar(32)
   status             String    @db.VarChar(32)
-  previousHash       String?   @db.VarChar(64)
-  newHash            String?   @db.VarChar(64)
-  pagesScraped       Int       @default(0)
-  benefitsUpserted   Int       @default(0)
-  errorMessage       String?   @db.Text
-  triggeredBy        String    @default("schedule") @db.VarChar(32)
-  startedAt          DateTime  @default(now()) @db.Timestamptz
-  completedAt        DateTime? @db.Timestamptz
+  previousHash       String?   @map("previous_hash") @db.VarChar(64)
+  newHash            String?   @map("new_hash") @db.VarChar(64)
+  pagesScraped       Int       @default(0) @map("pages_scraped")
+  benefitsUpserted   Int       @default(0) @map("benefits_upserted")
+  errorMessage       String?   @map("error_message") @db.Text
+  triggeredBy        String    @default("schedule") @map("triggered_by") @db.VarChar(32)
+  startedAt          DateTime  @default(now()) @map("started_at") @db.Timestamptz
+  completedAt        DateTime? @map("completed_at") @db.Timestamptz
   card Card @relation(fields: [cardId], references: [id])
   @@index([cardId, startedAt(sort: Desc)], name: "idx_scraper_card_started")
   @@map("scraper_runs")
