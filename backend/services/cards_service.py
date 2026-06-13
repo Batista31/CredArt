@@ -15,6 +15,10 @@ _CARD_COLUMNS = """
     currency_name,
     image_asset_url,
     card_page_url,
+    joining_fee_inr,
+    points_expiry_months,
+    excluded_categories,
+    blackout_dates,
     is_active
 """
 

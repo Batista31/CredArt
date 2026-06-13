@@ -16,6 +16,7 @@ _PARTNER_COLUMNS = """
     processing_days_max,
     reversible,
     effective_value_inr,
+    best_use_case,
     source_url,
     content_hash,
     effective_date

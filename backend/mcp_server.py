@@ -18,6 +18,7 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 
 from services import (
+    benefit_chunks_service,
     benefits_service,
     cards_service,
     redemption_service,
@@ -131,6 +132,26 @@ async def get_tnc_updates(card_id: str) -> dict:
     if tnc is None:
         return {"scope": "card_level", "card_id": card_id, "error": "no_current_tnc"}
     return wrap(tnc, card_id=card_id)
+
+
+@mcp.tool()
+async def get_benefit_chunks(
+    query: str,
+    card_id: str | None = None,
+    top_k: int = 5,
+) -> dict:
+    """Semantic search over card benefits (pgvector). Card-level — no user data.
+
+    Embeds the natural-language query and returns the most similar benefit
+    chunks by cosine similarity, each with a source_url and similarity score.
+
+    Args:
+        query: natural-language description of what the user wants.
+        card_id: optional — restrict the search to a single card.
+        top_k: number of chunks to return (1-20, default 5).
+    """
+    chunks = await benefit_chunks_service.get_benefit_chunks(query, card_id, top_k)
+    return wrap({"query": query, "count": len(chunks), "chunks": chunks}, card_id=card_id)
 
 
 if __name__ == "__main__":

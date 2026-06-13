@@ -48,8 +48,9 @@ async def main():
 
     print(f"\n=== 5. get_redemption_rules({cid}) ===")
     rules = await redemption_service.get_redemption_rules(cid)
-    print(f"  earn_rules={len(rules['earn_rules'])} fees={len(rules['fees'])} "
-          f"caveats={len(rules['caveats'])}")
+    print(f"  redemption_options={len(rules['redemption_options'])} "
+          f"milestones={len(rules['milestones'])}")
+    print(f"  fine_print={json.dumps(wrap(rules)['data']['fine_print'])}")
     print(f"  transfer_summary={json.dumps(wrap(rules)['data']['transfer_summary'])}")
 
     print(f"\n=== 6. get_tnc_updates({cid}) ===")

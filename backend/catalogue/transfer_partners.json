@@ -1,1 +1,66 @@
-[]
+[
+  {
+    "card_name": "Infinia",
+    "partner_name": "Marriott Bonvoy",
+    "partner_type": "Hotel",
+    "transfer_ratio": "1:1",
+    "minimum_transfer_points": 1000,
+    "processing_days": 2,
+    "reversible": false,
+    "estimated_value_per_point_inr": 1.2,
+    "best_use_case": "Luxury hotel stays",
+    "source_url": "https://www.hdfcbank.com/personal/pay/cards/credit-cards/infinia-credit-card"
+  },
+
+  {
+    "card_name": "Infinia",
+    "partner_name": "Singapore KrisFlyer",
+    "partner_type": "Airline",
+    "transfer_ratio": "2:1",
+    "minimum_transfer_points": 2000,
+    "processing_days": 5,
+    "reversible": false,
+    "estimated_value_per_point_inr": 1.4,
+    "best_use_case": "Business class international flights",
+    "source_url": "https://www.hdfcbank.com/personal/pay/cards/credit-cards/infinia-credit-card"
+  },
+
+  {
+    "card_name": "Infinia",
+    "partner_name": "Air India Maharaja Club",
+    "partner_type": "Airline",
+    "transfer_ratio": "2:1",
+    "minimum_transfer_points": 2000,
+    "processing_days": 3,
+    "reversible": false,
+    "estimated_value_per_point_inr": 1.1,
+    "best_use_case": "Domestic and international Air India travel",
+    "source_url": "https://www.hdfcbank.com/personal/pay/cards/credit-cards/infinia-credit-card"
+  },
+
+  {
+    "card_name": "Regalia Gold",
+    "partner_name": "Club Vistara",
+    "partner_type": "Airline",
+    "transfer_ratio": "2:1",
+    "minimum_transfer_points": 2000,
+    "processing_days": 4,
+    "reversible": false,
+    "estimated_value_per_point_inr": 1.0,
+    "best_use_case": "Domestic premium economy travel",
+    "source_url": "https://www.hdfcbank.com/personal/pay/cards/credit-cards/regalia-gold-credit-card"
+  },
+
+  {
+    "card_name": "Regalia Gold",
+    "partner_name": "Accor Live Limitless",
+    "partner_type": "Hotel",
+    "transfer_ratio": "2:1",
+    "minimum_transfer_points": 2000,
+    "processing_days": 5,
+    "reversible": false,
+    "estimated_value_per_point_inr": 0.9,
+    "best_use_case": "Mid-range hotel stays",
+    "source_url": "https://www.hdfcbank.com/personal/pay/cards/credit-cards/regalia-gold-credit-card"
+  }
+]

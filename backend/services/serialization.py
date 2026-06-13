@@ -11,17 +11,20 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import uuid
 from decimal import Decimal
 from typing import Any
 
 
 def to_jsonable(value: Any) -> Any:
-    """Recursively convert DB values (Decimal, date/datetime) to JSON-safe types."""
+    """Recursively convert DB values (Decimal, date/datetime, UUID) to JSON-safe types."""
     if isinstance(value, Decimal):
         # int when whole, float otherwise — keeps ratios like 2:1 clean.
         return int(value) if value == value.to_integral_value() else float(value)
     if isinstance(value, (datetime.date, datetime.datetime)):
         return value.isoformat()
+    if isinstance(value, uuid.UUID):
+        return str(value)
     if isinstance(value, dict):
         return {k: to_jsonable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
