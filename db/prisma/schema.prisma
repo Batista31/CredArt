@@ -120,6 +120,7 @@ model User {
   preferences          Preference?
   redemptionHistory    RedemptionHistory[]
   recommendationEvents RecommendationEvent[]
+  smsMessages          SmsMessage[]
   @@map("users")
 }
 
@@ -145,6 +146,7 @@ model UserCard {
   card              Card                @relation(fields: [cardId], references: [id])
   pointsLedger      PointsLedger[]
   redemptionHistory RedemptionHistory[]
+  smsMessages       SmsMessage[]
   @@unique([userId, cardId])
   @@index([userId])
   @@index([cardId])
@@ -258,6 +260,27 @@ model BenefitEmbedding {
   card    Card    @relation(fields: [cardId], references: [id])
   @@index([cardId])
   @@map("benefit_embeddings")
+}
+
+model SmsMessage {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  userCardId   String?   @map("user_card_id") @db.Uuid
+  smsHash      String    @unique @map("sms_hash") @db.VarChar(64)
+  sender       String?   @db.VarChar(32)
+  smsType      String    @map("sms_type") @db.VarChar(32)
+  cardLast4    String?   @map("card_last4") @db.VarChar(4)
+  rawText      String    @map("raw_text") @db.Text
+  parsed       Json?     @db.JsonB
+  applied      Boolean   @default(false)
+  errorMessage String?   @map("error_message") @db.Text
+  receivedAt   DateTime  @default(now()) @map("received_at") @db.Timestamptz
+  processedAt  DateTime  @default(now()) @map("processed_at") @db.Timestamptz
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userCard UserCard? @relation(fields: [userCardId], references: [id])
+  @@index([userId])
+  @@index([userCardId])
+  @@map("sms_messages")
 }
 
 model ScraperRun {

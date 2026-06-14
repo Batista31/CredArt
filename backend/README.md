@@ -37,6 +37,28 @@ backend/
 Tools 1-6 are pure SQL. `get_benefit_chunks` embeds the query and runs cosine
 search — the only tool that calls an embedding provider.
 
+## Phase 4 — SMS parser (user data)
+
+User balance/expiry enters CredArt **only** by parsing the bank's SMS — the
+bank MCP server is card-level and never exposes user data. This path writes to
+the user tables (`user_cards`, `points_ledger`, `redemption_history`,
+`sms_messages`) and is intentionally **not** an MCP tool.
+
+- `services/sms_parser.py` — pure, ReDoS-safe parser → `ParsedSMS`
+  (type, last4, points_delta, balance_after, expiry). Types: `earn`,
+  `redeem`, `expiry_alert`, `unknown`.
+- `services/sms_service.py` — `ingest_sms(user_id, raw_text, ...)` applies it:
+  - **idempotent** (every SMS hashed into `sms_messages`; duplicates skipped),
+  - **validated** (delta ≤ ±200k, balance ≥ 0, expiry near-future),
+  - **scoped** (card matched by last4 within that user's cards only),
+  - redemption confirmations flip a matching `pending` → `completed`.
+- Migration 0009 adds `sms_messages` (audit + idempotency, RLS select-own).
+
+```powershell
+.venv\Scripts\python test_sms_parser.py    # pure parser unit tests
+.venv\Scripts\python sms_demo.py           # end-to-end demo (run reset_demo.sql first)
+```
+
 ## Catalogue data (source of truth)
 
 The card-level catalogue lives in `backend/catalogue/`:
