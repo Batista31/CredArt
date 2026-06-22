@@ -65,6 +65,13 @@ async def fetchrow(query: str, *args) -> dict | None:
         return dict(row) if row else None
 
 
+async def execute(query: str, *args) -> str:
+    """Run a write statement (INSERT/UPDATE/DELETE)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.execute(query, *args)
+
+
 async def close_pool() -> None:
     global _pool
     if _pool is not None:

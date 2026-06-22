@@ -6,6 +6,20 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 
 from services.sms_parser import EARN, EXPIRY_ALERT, REDEEM, UNKNOWN, parse_sms
+from services.sms_senders import is_allowed_sender, normalize_sender
+
+SENDER_CASES = [
+    ("VM-HDFCBK", True),    # operator prefix + HDFC header
+    ("AD-HDFCBK", True),
+    ("HDFCBK", True),
+    ("hdfcbk", True),       # case-insensitive
+    ("AX-AXISBK", False),   # different bank
+    ("VM-ICICIB", False),
+    ("+919812345678", False),  # personal number spoof
+    ("9812345678", False),
+    ("", False),
+    (None, False),
+]
 
 CASES = [
     ("Rs.1,250 spent on HDFC Millennia Card xx3391 at SWIGGY on 10-06-26. Earned 63 CashPoints. Avl pts: 3,263.",
@@ -35,7 +49,16 @@ def main():
                 failures += 1
         if all(getattr(p, f) == v for f, v in expect.items()):
             print(f"  ✓ case {i}: {p.sms_type}")
-    print("\n" + ("✅ all SMS parser cases pass" if failures == 0 else f"❌ {failures} assertion(s) failed"))
+
+    print("\n  sender allowlist:")
+    for sender, want in SENDER_CASES:
+        got = is_allowed_sender(sender)
+        mark = "✓" if got == want else "✗"
+        if got != want:
+            failures += 1
+        print(f"    {mark} {str(sender):16} -> {got} (norm={normalize_sender(sender)!r})")
+
+    print("\n" + ("✅ all SMS cases pass" if failures == 0 else f"❌ {failures} assertion(s) failed"))
     sys.exit(1 if failures else 0)
 
 

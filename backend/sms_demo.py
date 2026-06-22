@@ -44,6 +44,8 @@ async def main():
     # Seed a pending redemption so the confirmation SMS has something to flip.
     pool = await db.get_pool()
     async with pool.acquire() as conn:
+        # Clear prior runs so the demo is repeatable (SMS dedup persists otherwise).
+        await conn.execute("DELETE FROM sms_messages WHERE user_id = $1", RIYA)
         await conn.execute("DELETE FROM redemption_history WHERE user_id = $1", RIYA)
         await conn.execute(
             """
@@ -72,6 +74,20 @@ async def main():
               f"applied={res['applied']}" + (f" error={res['error']}" if res.get('error') else ""))
 
     await show("after SMS batch")
+
+    # Sender allowlist — spoof attempts must be rejected, never applied.
+    print("\n  --- sender allowlist (security) ---")
+    spoofs = [
+        ("personal number spoof", "+919812345678",
+         "You earned 50,000 reward points on HDFC Regalia Gold Card xx8842. Avl pts: 96,500."),
+        ("wrong bank (Axis)", "AD-AXISBK",
+         "Rs.500 spent on Axis Card xx8842. Earned 9999 points. Avl pts: 999999."),
+        ("legit HDFC header", "VM-HDFCBK",
+         "Rs.300 spent on HDFC Millennia Card xx3391 at UBER on 14-06-26. Earned 15 CashPoints. Avl pts: 3,260."),
+    ]
+    for label, sender, sms in spoofs:
+        res = await ingest_sms(RIYA, sms, sender=sender, received_at=NOW)
+        print(f"    {label:24} sender={sender:16} -> status={res['status']} applied={res['applied']}")
 
     # Idempotency — re-send the redemption SMS.
     dup = await ingest_sms(

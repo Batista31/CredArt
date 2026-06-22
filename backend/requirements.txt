@@ -2,5 +2,8 @@ mcp>=1.2.0
 asyncpg>=0.29.0
 python-dotenv>=1.0.1
 uvicorn>=0.30.0
+fastapi>=0.110.0
 google-genai>=1.0.0
 openai>=1.40.0
+# Optional — activated by config / later phases:
+redis>=5.0.0          # session store when REDIS_URL is set (else in-memory)

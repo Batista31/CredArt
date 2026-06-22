@@ -35,16 +35,17 @@ DELETE FROM recommendation_events
 -- ------------------------------------------------------------
 -- 2. Restore user_cards to spec (points + expiry, absolute dates)
 -- ------------------------------------------------------------
+-- Relative dates so the demo urgency is always fresh, whenever this is run.
 UPDATE user_cards SET
     current_points    = 46500,
     next_expiry_points = 8000,
-    next_expiry_date  = DATE '2026-06-13'   -- expiring in 2 days (demo urgency)
+    next_expiry_date  = CURRENT_DATE + INTERVAL '2 days'   -- expiring in 2 days
  WHERE id = '00000000-0000-0000-0002-000000000001';
 
 UPDATE user_cards SET
     current_points    = 3200,
     next_expiry_points = 3200,
-    next_expiry_date  = DATE '2026-06-11'   -- TODAY — Zomato credits at risk
+    next_expiry_date  = CURRENT_DATE                       -- TODAY — Zomato credits at risk
  WHERE id = '00000000-0000-0000-0002-000000000002';
 
 -- ------------------------------------------------------------
@@ -53,17 +54,17 @@ UPDATE user_cards SET
 -- ------------------------------------------------------------
 INSERT INTO points_ledger (user_card_id, transaction_type, points_delta, balance_after, description, expiry_date)
 VALUES
-('00000000-0000-0000-0002-000000000001', 'earn', 38800, 38800, 'Opening balance (carried forward)', DATE '2026-09-30'),
-('00000000-0000-0000-0002-000000000001', 'earn',  1200, 40000, 'Spend reward — dining Good Food Trail', DATE '2026-09-09'),
-('00000000-0000-0000-0002-000000000001', 'earn',  2500, 42500, 'Spend reward — hotel stay', DATE '2026-08-10'),
-('00000000-0000-0000-0002-000000000001', 'earn',  4000, 46500, 'Spend reward — travel booking', DATE '2026-06-13');
+('00000000-0000-0000-0002-000000000001', 'earn', 38800, 38800, 'Opening balance (carried forward)', CURRENT_DATE + INTERVAL '110 days'),
+('00000000-0000-0000-0002-000000000001', 'earn',  1200, 40000, 'Spend reward — dining Good Food Trail', CURRENT_DATE + INTERVAL '90 days'),
+('00000000-0000-0000-0002-000000000001', 'earn',  2500, 42500, 'Spend reward — hotel stay', CURRENT_DATE + INTERVAL '60 days'),
+('00000000-0000-0000-0002-000000000001', 'earn',  4000, 46500, 'Spend reward — travel booking', CURRENT_DATE + INTERVAL '2 days');
 
 -- ------------------------------------------------------------
 -- 4. Re-seed Millennia ledger (Zomato credits, expiring today)
 -- ------------------------------------------------------------
 INSERT INTO points_ledger (user_card_id, transaction_type, points_delta, balance_after, description, expiry_date)
 VALUES
-('00000000-0000-0000-0002-000000000002', 'earn', 3200, 3200, 'CashPoints — online food delivery (Zomato)', DATE '2026-06-11');
+('00000000-0000-0000-0002-000000000002', 'earn', 3200, 3200, 'CashPoints — online food delivery (Zomato)', CURRENT_DATE);
 
 -- ------------------------------------------------------------
 -- 5. Reset Riya's preferences to seed baseline

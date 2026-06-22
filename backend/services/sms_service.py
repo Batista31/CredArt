@@ -19,6 +19,7 @@ import json
 
 from . import db
 from .sms_parser import EARN, EXPIRY_ALERT, REDEEM, UNKNOWN, ParsedSMS, parse_sms
+from .sms_senders import is_allowed_sender
 
 # Validation bounds.
 MAX_ABS_DELTA = 200_000       # a single SMS shouldn't move more than this
@@ -64,6 +65,24 @@ async def ingest_sms(
         if existing:
             return {"status": "duplicate", "sms_type": existing["sms_type"],
                     "applied": existing["applied"]}
+
+        # Sender allowlist — we only parse SMS from the bank's registered header.
+        # Reject (but record for audit) anything else: another bank, a shortcode,
+        # or a personal number spoofing the bank. Never parsed, never applied.
+        if not is_allowed_sender(sender):
+            err = f"sender {sender!r} is not an allowlisted bank header"
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO sms_messages
+                        (user_id, sms_hash, sender, sms_type, raw_text,
+                         applied, error_message, received_at)
+                    VALUES ($1,$2,$3,'rejected',$4,FALSE,$5,$6)
+                    """,
+                    user_id, sms_hash, sender, raw_text, err, received_at,
+                )
+            return {"status": "rejected_sender", "sms_type": "rejected",
+                    "applied": False, "error": err}
 
         parsed = parse_sms(raw_text)
 

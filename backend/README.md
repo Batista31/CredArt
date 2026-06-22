@@ -37,6 +37,58 @@ backend/
 Tools 1-6 are pure SQL. `get_benefit_chunks` embeds the query and runs cosine
 search — the only tool that calls an embedding provider.
 
+## Phase 6 — Scoring engine (Layer 1)
+
+`services/scoring_service.py` ranks the candidate set with a deterministic
+5-dimension score (0–100 each), combined by fixed weights:
+
+| Dimension | Weight | Source |
+|-----------|--------|--------|
+| financial | 0.35 | best ₹/pt across the card's transfer partners (real) |
+| lifestyle | 0.25 | user preference weight for the category, blended with search similarity |
+| redemption_prob | 0.20 | confirm rate from `recommendation_events`; cold-start prior from prefs |
+| expiry_risk | 0.10 | days-to-expiry of the card's expiring points |
+| flexibility | 0.10 | optionality by kind (transfer > perk > redemption) |
+
+`score_candidates()` attaches all six scores + `rank` and sorts. Every value
+is derived from real data — no invented ₹ figures; the score is an internal
+ranking signal, not shown to the user as a value. The `/chat` handler logs the
+top candidates to `recommendation_events` (the preference-learning signal;
+`user_action` filled later when the user acts). Phase 7 (Claude) reranks/
+explains these — it never recomputes the score and never sees the DB.
+
+## Phase 5 — FastAPI orchestration backend
+
+The orchestration layer (port 8001) that turns a chat message into a
+**pre-validated candidate set** + reply. It wires Layer 1 (deterministic
+services + SMS-sourced user data) and leaves a clean seam for Claude (Phase 7),
+which will receive ONLY this candidate set — never the DB.
+
+`api/` package:
+- `main.py` — FastAPI app + routes (port 8001)
+- `schemas.py` — Pydantic models (Intent, Candidate, ToolCall, ChatResponse)
+- `session.py` — conversation store: in-memory, auto-upgrades to Redis if
+  `REDIS_URL` is set
+- `intent.py` — deterministic NLU → `Intent` (Phase 7 can swap in Claude)
+- `orchestrator.py` — intent → Layer 1 candidate assembly + `tool_trace`
+  (affordability + expiry flags computed deterministically; no invented values)
+
+Endpoints:
+- `GET  /health` — liveness + embedding provider + session backend
+- `POST /chat` — `{user_id, message, session_id?}` → intent, candidates, reply, tool_trace
+- `POST /sms` — ingest a bank SMS (wires the Phase 4 parser)
+- `GET  /cards/{user_id}` — portfolio for the frontend
+
+```powershell
+# MCP server (port 8000) and this backend (8001) are separate processes.
+.venv\Scripts\python -m uvicorn api.main:app --port 8001 --reload
+```
+
+Note: the orchestrator calls the same Layer 1 services the MCP server wraps
+(in-process), so the backend runs standalone. The MCP server remains the
+external card-level interface. `claude_used` in the response is `false` until
+Phase 7 wires Claude reranking.
+
 ## Phase 4 — SMS parser (user data)
 
 User balance/expiry enters CredArt **only** by parsing the bank's SMS — the
@@ -47,12 +99,22 @@ the user tables (`user_cards`, `points_ledger`, `redemption_history`,
 - `services/sms_parser.py` — pure, ReDoS-safe parser → `ParsedSMS`
   (type, last4, points_delta, balance_after, expiry). Types: `earn`,
   `redeem`, `expiry_alert`, `unknown`.
-- `services/sms_service.py` — `ingest_sms(user_id, raw_text, ...)` applies it:
+- `services/sms_senders.py` — **sender allowlist** (security). We may only parse
+  SMS from the bank's official DLT-registered headers (`HDFCBK`, incl. operator
+  prefixes like `VM-HDFCBK`). Another bank, a shortcode, or a personal number
+  spoofing the bank is **rejected before parsing** — it can never inject a fake
+  balance. Enforced server-side in addition to the app only reading the bank's
+  sender (defense in depth).
+- `services/sms_service.py` — `ingest_sms(user_id, raw_text, sender, ...)` applies it:
+  - **sender-allowlisted** (rejected senders recorded as `sms_type='rejected'`, never applied),
   - **idempotent** (every SMS hashed into `sms_messages`; duplicates skipped),
   - **validated** (delta ≤ ±200k, balance ≥ 0, expiry near-future),
   - **scoped** (card matched by last4 within that user's cards only),
   - redemption confirmations flip a matching `pending` → `completed`.
 - Migration 0009 adds `sms_messages` (audit + idempotency, RLS select-own).
+
+To onboard another bank, add its DLT headers to `ALLOWED_HEADERS` in
+`sms_senders.py`.
 
 ```powershell
 .venv\Scripts\python test_sms_parser.py    # pure parser unit tests

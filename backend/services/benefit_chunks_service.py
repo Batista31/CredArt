@@ -24,22 +24,28 @@ async def get_benefit_chunks(
     where = ""
     if card_id is not None:
         args.append(card_id)
-        where = "WHERE card_id = $2"
+        where = "WHERE be.card_id = $2"
     args.append(max(1, min(top_k, 20)))
     limit_pos = len(args)
 
+    # Join benefits so callers get points_cost / name / type alongside the chunk
+    # (needed for affordability + redemption candidates). Still card-level only.
     rows = await db.fetch(
         f"""
-        SELECT benefit_id,
-               card_id,
-               category,
-               chunk_text,
-               source_url,
-               content_hash,
-               1 - (embedding <=> $1::vector) AS similarity
-        FROM benefit_embeddings
+        SELECT be.benefit_id,
+               be.card_id,
+               be.category,
+               be.chunk_text,
+               be.source_url,
+               be.content_hash,
+               b.benefit_name,
+               b.benefit_type,
+               b.points_cost,
+               1 - (be.embedding <=> $1::vector) AS similarity
+        FROM benefit_embeddings be
+        JOIN benefits b ON b.id = be.benefit_id
         {where}
-        ORDER BY embedding <=> $1::vector
+        ORDER BY be.embedding <=> $1::vector
         LIMIT ${limit_pos}
         """,
         *args,
