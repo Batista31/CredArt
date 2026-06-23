@@ -1,13 +1,6 @@
-"""Deterministic intent extraction (Layer 1).
-
-Phase 5 uses transparent keyword/heuristic rules — fast, free, and predictable,
-which suits the anti-hallucination posture. Phase 7 can swap in a Claude-based
-NLU behind the same `extract_intent` signature without changing callers.
-"""
+"""Intent extraction — Phase 7: Groq LLM primary, keyword heuristic fallback."""
 
 from __future__ import annotations
-
-import re
 
 from .schemas import Intent
 
@@ -37,9 +30,25 @@ def _match(text: str, words: list[str]) -> bool:
     return any(w in text for w in words)
 
 
-def extract_intent(message: str) -> Intent:
+async def extract_intent(message: str) -> Intent:
     text = (message or "").lower().strip()
 
+    # --- LLM path (Groq primary) ---
+    from services.llm_service import llm_extract_intent
+    parsed = await llm_extract_intent(message)
+    if parsed:
+        try:
+            return Intent(
+                kind=parsed.get("kind", "unknown"),
+                query=parsed.get("query", message or ""),
+                card_id=parsed.get("card_id"),
+                category=parsed.get("category"),
+                urgency=bool(parsed.get("urgency", False)),
+            )
+        except Exception:
+            pass  # fall through to heuristic
+
+    # --- Heuristic fallback ---
     card_id = next((cid for alias, cid in _CARD_ALIASES.items() if alias in text), None)
     category = next((cat for cat, hints in _CATEGORY_HINTS.items() if _match(text, hints)), None)
     urgency = _match(text, _EXPIRY)

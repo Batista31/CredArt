@@ -17,12 +17,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from services import db, embeddings_service, scoring_service, user_service
+from services import bank_mcp_client, db, embeddings_service, scoring_service, user_service
 from services.sms_service import ingest_sms
+
+from services.redemption import registry
+from services.redemption.executor import execute_redemption
 
 from .intent import extract_intent
 from .orchestrator import orchestrate
-from .schemas import ChatRequest, ChatResponse, SmsRequest
+from .schemas import ChatRequest, ChatResponse, RedeemRequest, RedeemResponse, SmsRequest
 from .session import SessionStore
 
 store = SessionStore()
@@ -31,7 +34,9 @@ store = SessionStore()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.get_pool()  # warm the pool
+    await bank_mcp_client.startup()  # connect to the mock bank MCP (falls back if down)
     yield
+    await bank_mcp_client.shutdown()
     await db.close_pool()
 
 
@@ -51,6 +56,7 @@ async def health():
         "embedding_provider": embeddings_service.PROVIDER,
         "embedding_model": embeddings_service.EMBED_MODEL,
         "session_backend": store.backend,
+        "bank_data_source": bank_mcp_client.backend(),
     }
 
 
@@ -63,7 +69,7 @@ async def chat(req: ChatRequest):
     session = await store.load(req.session_id)
     await store.append_turn(session, "user", req.message)
 
-    intent = extract_intent(req.message)
+    intent = await extract_intent(req.message)
     cards = await user_service.get_user_cards(req.user_id)
     candidates, trace, meta = await orchestrate(intent, user, cards)
 
@@ -79,10 +85,40 @@ async def chat(req: ChatRequest):
         candidates=candidates,
         reply=meta["reply"],
         tool_trace=trace,
-        claude_used=False,  # Phase 7 flips this on
+        claude_used=meta.get("llm_used", False),
     )
     await store.append_turn(session, "assistant", resp.reply)
+    # Stash this turn's candidate set so /redeem can resolve a one-click choice.
+    session["last_candidates"] = [c.model_dump() for c in candidates]
+    await store.save(session)
     return resp
+
+
+@app.post("/redeem", response_model=RedeemResponse)
+async def redeem(req: RedeemRequest):
+    user = await user_service.get_user(req.user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="unknown user_id")
+
+    session = await store.load(req.session_id)
+    candidates = session.get("last_candidates") or []
+    candidate = next((c for c in candidates if c.get("candidate_id") == req.candidate_id), None)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="unknown candidate_id for this session")
+
+    provider = registry.get_provider(req.provider_id)
+    if provider is None:
+        raise HTTPException(status_code=400, detail="unknown provider_id")
+    if provider.mode != req.mode:
+        raise HTTPException(status_code=400,
+                            detail=f"provider '{req.provider_id}' is {provider.mode}, not {req.mode}")
+    if not provider.is_available():
+        raise HTTPException(status_code=400,
+                            detail=provider.unavailable_note() or "provider unavailable")
+
+    traveler = (req.traveler.model_dump() if req.traveler else {})
+    result = await execute_redemption(req.user_id, candidate, provider, traveler)
+    return RedeemResponse(**result)
 
 
 @app.post("/sms")

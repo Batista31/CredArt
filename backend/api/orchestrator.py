@@ -14,14 +14,12 @@ never the DB.
 
 from __future__ import annotations
 
-from services import (
-    benefit_chunks_service,
-    redemption_service,
-    scoring_service,
-    transfer_partners_service,
-)
+from uuid import uuid4
 
-from .schemas import Candidate, Intent, ToolCall
+from services import bank_mcp_client, scoring_service
+from services.redemption import registry
+
+from .schemas import Candidate, FulfillmentOption, Intent, ToolCall
 
 
 def _expiry_phrase(days: int | None) -> str:
@@ -44,6 +42,13 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
     name_of = {c["card_id"]: c["card_name"] for c in cards}
     points_of = {c["card_id"]: c["current_points"] for c in cards}
 
+    _caveat_cache: dict[str, str | None] = {}
+
+    async def caveat_for(cid: str) -> str | None:
+        if cid not in _caveat_cache:
+            _caveat_cache[cid] = await bank_mcp_client.get_caveat(cid)
+        return _caveat_cache[cid]
+
     # --- Expiry candidates (proactive hook) ---
     soonest = None
     if intent.kind in ("greeting", "check_expiry", "redeem"):
@@ -60,10 +65,11 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
     # --- Proactive: affordable redemptions ON the expiring card (deterministic) ---
     if intent.kind in ("greeting", "check_expiry") and soonest is not None:
         cid = soonest[0]["card_id"]
-        rules = await redemption_service.get_redemption_rules(cid)
+        rules = await bank_mcp_client.get_redemption_rules(cid)
         trace.append(ToolCall(tool="get_redemption_rules", args={"card_id": cid},
                               result_count=len(rules["redemption_options"])))
         bal = points_of.get(cid, 0)
+        cav = await caveat_for(cid)
         affordable = sorted(
             (o for o in rules["redemption_options"] if o["points_cost"] is not None and bal >= o["points_cost"]),
             key=lambda o: o["points_cost"])
@@ -72,12 +78,12 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
                 kind="redemption", card_id=cid, card_name=name_of[cid],
                 label=o["benefit_name"], category=o.get("category"),
                 points_cost=o["points_cost"], affordable=True,
-                source_url=o["source_url"], note="redeemable before expiry"))
+                source_url=o["source_url"], note="redeemable before expiry", caveat=cav))
 
     # --- Semantic redemption / perk candidates ---
     if intent.kind in ("explore_benefits", "redeem"):
         query = intent.query.strip() or (intent.category or "rewards")
-        hits = await benefit_chunks_service.get_benefit_chunks(query, intent.card_id, top_k=8)
+        hits = await bank_mcp_client.get_benefit_chunks(query, intent.card_id, top_k=8)
         trace.append(ToolCall(tool="get_benefit_chunks",
                               args={"query": query, "card_id": intent.card_id},
                               result_count=len(hits)))
@@ -98,13 +104,14 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
                     label=h["benefit_name"], category=h.get("category"),
                     points_cost=pc, affordable=bal >= pc,
                     similarity=h["similarity"], source_url=h["source_url"],
-                    note=None if bal >= pc else f"needs {pc - bal:,} more points"))
+                    note=None if bal >= pc else f"needs {pc - bal:,} more points",
+                    caveat=await caveat_for(h["card_id"])))
 
     # --- Transfer candidates ---
     if intent.kind in ("transfer", "explore_benefits"):
         target = [intent.card_id] if intent.card_id else list(held)
         for cid in target:
-            partners = await transfer_partners_service.get_transfer_partners(cid)
+            partners = await bank_mcp_client.get_transfer_partners(cid)
             trace.append(ToolCall(tool="get_transfer_partners",
                                   args={"card_id": cid}, result_count=len(partners)))
             for p in partners[:2]:
@@ -120,8 +127,29 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
         trace.append(ToolCall(tool="score_candidates", args={"dims": 5},
                               result_count=len(candidates)))
 
-    reply = _templated_reply(intent, user, candidates, soonest)
-    meta = {"soonest_expiry": soonest[0]["card_id"] if soonest else None}
+    # --- Phase 9: stable id + fulfilment options (live providers + always demo) ---
+    for c in candidates:
+        c.candidate_id = uuid4().hex[:8]
+        if c.kind in ("redemption", "perk"):
+            c.fulfillment_options = [FulfillmentOption(**o)
+                                     for o in registry.fulfillment_options_for(c.model_dump())]
+
+    # --- Phase 7: LLM rerank + reply (Groq primary, template fallback) ---
+    llm_reply = None
+    llm_used = False
+    if candidates:
+        try:
+            from services.llm_service import llm_rerank_reply
+            llm_reply, llm_used = await llm_rerank_reply(
+                candidates[:8], user.get("name", ""), intent.query)
+        except Exception as e:
+            print(f"[orchestrator] LLM rerank failed ({e}), using template")
+
+    reply = llm_reply or _templated_reply(intent, user, candidates, soonest)
+    meta = {
+        "soonest_expiry": soonest[0]["card_id"] if soonest else None,
+        "llm_used": llm_used,
+    }
     return candidates[:8], trace, {"reply": reply, **meta}
 
 
