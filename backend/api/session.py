@@ -51,6 +51,10 @@ class SessionStore:
         session["turns"] = session["turns"][-_MAX_TURNS:]
         await self._save(session)
 
+    async def save(self, session: dict) -> None:
+        """Public persist (used to stash the turn's candidate set for /redeem)."""
+        await self._save(session)
+
     async def _save(self, session: dict) -> None:
         sid = session["session_id"]
         if self._redis is not None:

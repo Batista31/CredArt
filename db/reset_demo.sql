@@ -39,13 +39,15 @@ DELETE FROM recommendation_events
 UPDATE user_cards SET
     current_points    = 46500,
     next_expiry_points = 8000,
-    next_expiry_date  = CURRENT_DATE + INTERVAL '2 days'   -- expiring in 2 days
+    next_expiry_date  = CURRENT_DATE + INTERVAL '2 days',  -- expiring in 2 days
+    demo_points       = 100000                             -- replayable demo bucket
  WHERE id = '00000000-0000-0000-0002-000000000001';
 
 UPDATE user_cards SET
     current_points    = 3200,
     next_expiry_points = 3200,
-    next_expiry_date  = CURRENT_DATE                       -- TODAY — Zomato credits at risk
+    next_expiry_date  = CURRENT_DATE,                      -- TODAY — Zomato credits at risk
+    demo_points       = 100000                             -- replayable demo bucket
  WHERE id = '00000000-0000-0000-0002-000000000002';
 
 -- ------------------------------------------------------------

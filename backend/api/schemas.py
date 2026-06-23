@@ -19,8 +19,21 @@ class Intent(BaseModel):
     urgency: bool = False
 
 
+class FulfillmentOption(BaseModel):
+    """A way to actually fulfil a candidate. `live` options book for real
+    (and spend real points); the `demo` option is always present, mimics the
+    booking, and spends demo_points so the demo is replayable."""
+    provider_id: str
+    label: str
+    mode: Literal["live", "demo"]
+    currency: Literal["points", "demo_points"]
+    available: bool = True
+    note: Optional[str] = None
+
+
 class Candidate(BaseModel):
     kind: Literal["redemption", "transfer", "expiry", "perk"]
+    candidate_id: Optional[str] = None
     card_id: str
     card_name: str
     label: str
@@ -33,6 +46,8 @@ class Candidate(BaseModel):
     expiry_urgent: bool = False
     source_url: Optional[str] = None
     note: Optional[str] = None
+    # Phase 8 — bank-sourced T&C caveat (blackout / excluded / expiry), shown before booking.
+    caveat: Optional[str] = None
     # Phase 6 — 5-dimension scoring (deterministic, 0–100)
     score_financial: Optional[float] = None
     score_lifestyle: Optional[float] = None
@@ -41,6 +56,8 @@ class Candidate(BaseModel):
     score_flexibility: Optional[float] = None
     score_total: Optional[float] = None
     rank: Optional[int] = None
+    # Phase 9 — how this candidate can be booked (live providers + always demo).
+    fulfillment_options: list[FulfillmentOption] = Field(default_factory=list)
 
 
 class ToolCall(BaseModel):
@@ -70,3 +87,41 @@ class SmsRequest(BaseModel):
     user_id: str
     text: str
     sender: str = "HDFCBK"
+
+
+class Traveler(BaseModel):
+    given_name: str = "Riya"
+    family_name: str = "Sharma"
+    email: str = "riya@example.com"
+    phone: str = "+919000000000"
+
+
+class RedeemRequest(BaseModel):
+    user_id: str
+    session_id: str
+    candidate_id: str
+    provider_id: str
+    mode: Literal["live", "demo"] = "demo"
+    traveler: Optional[Traveler] = None
+
+
+class RedeemStep(BaseModel):
+    label: str
+    status: Literal["done", "failed"] = "done"
+    detail: Optional[str] = None
+
+
+class RedeemResponse(BaseModel):
+    status: Literal["completed", "failed"]
+    transaction_id: str
+    confirmation_reference: Optional[str] = None
+    provider_id: str
+    mode: Literal["live", "demo"]
+    option_label: str
+    card_id: str
+    card_name: str
+    currency: Literal["points", "demo_points"]
+    points_used: int
+    balance_after: int
+    steps: list[RedeemStep] = Field(default_factory=list)
+    rollback_reason: Optional[str] = None
