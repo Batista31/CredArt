@@ -30,7 +30,10 @@ Schema:
   "query": "<user message verbatim>",
   "card_id": "<hdfc_infinia|hdfc_regalia_gold|hdfc_millennia or null>",
   "category": "<TRAVEL|DINING|ENTERTAINMENT|SHOPPING|WELLNESS or null>",
-  "urgency": true/false
+  "urgency": true/false,
+  "origin": "<3-letter IATA code of departure airport, or null>",
+  "destination": "<3-letter IATA code of the place the user wants to fly to, or null>",
+  "depart_date": "<YYYY-MM-DD if a travel date is stated or implied, else null>"
 }
 
 Rules:
@@ -42,6 +45,12 @@ Rules:
 - urgency=true: user signals time pressure around expiry
 - category: infer from context (flights/hotels→TRAVEL, food→DINING, movie→ENTERTAINMENT, etc.)
 - card_id: only set if user names a specific card
+- destination: ONLY when the user wants to fly somewhere; convert the city to its main
+  IATA code (Mumbai→BOM, Delhi→DEL, Bangalore→BLR, Goa→GOI, Dubai→DXB, London→LHR,
+  Singapore→SIN, New York→JFK, Bangkok→BKK, Maldives→MLE). Else null.
+- origin: only if the user states where they fly FROM; convert to IATA. Else null.
+- depart_date: resolve relative dates (next month, next friday, in 2 weeks) to an
+  absolute YYYY-MM-DD using the current date provided below. Else null.
 """
 
 _RERANK_SYSTEM = """You are CredArt's recommendation engine. You receive a ranked candidate list (already scored by a deterministic engine) and the user's message, and you write a concise, helpful reply.
@@ -121,8 +130,10 @@ async def _llm_call(system: str, user: str) -> tuple[str, bool]:
 
 async def llm_extract_intent(message: str) -> dict | None:
     """Returns parsed intent dict or None on failure (caller falls back to heuristic)."""
+    from datetime import date
+    system = f"{_INTENT_SYSTEM}\n\nThe current date is {date.today().isoformat()}."
     try:
-        raw, _ = await _llm_call(_INTENT_SYSTEM, message)
+        raw, _ = await _llm_call(system, message)
         # Strip markdown fences if model wraps in ```json
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         return json.loads(raw)

@@ -43,6 +43,17 @@ class DuffelProvider(RedemptionProvider):
             "Accept": "application/json",
         }
 
+    @staticmethod
+    def _resolve_date(value: str | None) -> str:
+        """A valid future ISO date, else the +30d sandbox default."""
+        default = (date.today() + timedelta(days=30)).isoformat()
+        if not value:
+            return default
+        try:
+            return value if date.fromisoformat(value) > date.today() else default
+        except ValueError:
+            return default
+
     async def book(self, candidate: dict, traveler: dict) -> BookingResult:
         if not self.token:
             return BookingResult(ok=False, error="DUFFEL_API_KEY not configured")
@@ -51,14 +62,18 @@ class DuffelProvider(RedemptionProvider):
         except Exception:
             return BookingResult(ok=False, error="httpx not installed")
 
-        dep = (date.today() + timedelta(days=30)).isoformat()
+        # Route comes from the candidate (built from the user's intent); fall back
+        # to the known-good sandbox route when a candidate carries no flight info.
+        origin = (candidate.get("origin") or "LHR").upper()
+        destination = (candidate.get("destination") or "JFK").upper()
+        dep = self._resolve_date(candidate.get("depart_date"))
         steps: list[dict] = []
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                # 1. Search offers (sandbox route LHR -> JFK, 1 adult).
+                # 1. Search offers (route from intent, 1 adult).
                 offer_req = {
                     "data": {
-                        "slices": [{"origin": "LHR", "destination": "JFK", "departure_date": dep}],
+                        "slices": [{"origin": origin, "destination": destination, "departure_date": dep}],
                         "passengers": [{"type": "adult"}],
                         "cabin_class": "economy",
                     }
@@ -76,7 +91,7 @@ class DuffelProvider(RedemptionProvider):
                 pax_id = offer["passengers"][0]["id"]
                 amount, currency = offer["total_amount"], offer["total_currency"]
                 steps.append({"label": "Searching flights", "status": "done",
-                              "detail": f"{offer['owner']['name']} {amount} {currency}"})
+                              "detail": f"{origin}→{destination} {dep} · {offer['owner']['name']} {amount} {currency}"})
 
                 # 2. Create the order (instant) with passenger details + balance payment.
                 order_req = {
@@ -98,7 +113,12 @@ class DuffelProvider(RedemptionProvider):
                 }
                 r2 = await client.post(f"{_BASE}/air/orders",
                                        headers=self._headers(), json=order_req)
-                r2.raise_for_status()
+                if not r2.is_success:
+                    try:
+                        errs = r2.json().get("errors") or r2.json()
+                    except Exception:
+                        errs = r2.text
+                    raise Exception(f"Duffel {r2.status_code}: {errs}")
                 order = r2.json()["data"]
                 ref = order.get("booking_reference") or order.get("id")
                 steps.append({"label": "Booking flight", "status": "done", "detail": ref})
@@ -106,5 +126,5 @@ class DuffelProvider(RedemptionProvider):
                 return BookingResult(ok=True, confirmation_reference=ref, steps=steps,
                                      raw={"order_id": order.get("id")})
         except Exception as e:
-            steps.append({"label": "Booking flight", "status": "failed", "detail": str(e)[:120]})
-            return BookingResult(ok=False, error=str(e)[:200], steps=steps)
+            steps.append({"label": "Booking flight", "status": "failed", "detail": str(e)[:400]})
+            return BookingResult(ok=False, error=str(e)[:600], steps=steps)

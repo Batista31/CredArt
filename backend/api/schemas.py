@@ -17,6 +17,10 @@ class Intent(BaseModel):
     card_id: Optional[str] = None
     category: Optional[str] = None
     urgency: bool = False
+    # Flight intent — IATA codes + ISO date, extracted when the user wants to fly.
+    origin: Optional[str] = None
+    destination: Optional[str] = None
+    depart_date: Optional[str] = None
 
 
 class FulfillmentOption(BaseModel):
@@ -48,6 +52,10 @@ class Candidate(BaseModel):
     note: Optional[str] = None
     # Phase 8 — bank-sourced T&C caveat (blackout / excluded / expiry), shown before booking.
     caveat: Optional[str] = None
+    # Flight route (IATA + ISO date) — carried to the Duffel provider at /redeem.
+    origin: Optional[str] = None
+    destination: Optional[str] = None
+    depart_date: Optional[str] = None
     # Phase 6 — 5-dimension scoring (deterministic, 0–100)
     score_financial: Optional[float] = None
     score_lifestyle: Optional[float] = None

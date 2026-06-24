@@ -19,7 +19,12 @@ from uuid import uuid4
 from services import bank_mcp_client, scoring_service
 from services.redemption import registry
 
+from .intent import CITY_TO_IATA
 from .schemas import Candidate, FulfillmentOption, Intent, ToolCall
+
+# Estimated points for an economy flight redemption. The real fare is searched +
+# confirmed live at booking time (Duffel); this is the deterministic redeem cost.
+_FLIGHT_POINTS_COST = 25000
 
 
 def _expiry_phrase(days: int | None) -> str:
@@ -120,6 +125,27 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
                     label=f"{p['partner_name']} ({p['ratio']})", category="TRAVEL",
                     effective_value_inr=float(p["effective_value_inr"]) if p["effective_value_inr"] is not None else None,
                     best_use_case=p["best_use_case"], source_url=p["source_url"]))
+
+    # --- First-class flight candidate (Duffel live) when a destination is known ---
+    if intent.destination and intent.kind in ("explore_benefits", "redeem"):
+        home = ((user or {}).get("city") or "").lower()
+        origin = intent.origin or CITY_TO_IATA.get(home) or "DEL"
+        dest = intent.destination
+        # Charge the user's strongest travel card (most current points).
+        travel_card = max(cards, key=lambda c: c["current_points"]) if cards else None
+        if travel_card and origin != dest:
+            cid = travel_card["card_id"]
+            bal = points_of.get(cid, 0)
+            candidates.append(Candidate(
+                kind="redemption", card_id=cid, card_name=name_of[cid],
+                label=f"Flight {origin}→{dest}", category="TRAVEL",
+                points_cost=_FLIGHT_POINTS_COST, affordable=bal >= _FLIGHT_POINTS_COST,
+                origin=origin, destination=dest, depart_date=intent.depart_date,
+                best_use_case="flight booking",
+                note="estimated economy redemption — fare confirmed at booking"))
+            trace.append(ToolCall(tool="build_flight_candidate",
+                                  args={"origin": origin, "destination": dest,
+                                        "depart_date": intent.depart_date}, result_count=1))
 
     # --- Phase 6: deterministic 5-dimension scoring + rank ---
     candidates = await scoring_service.score_candidates(user["user_id"], candidates, cards)

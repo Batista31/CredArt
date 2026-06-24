@@ -19,6 +19,31 @@ _CATEGORY_HINTS = {
     "WELLNESS": ["gym", "fitness", "cult", "wellness", "workout", "health"],
 }
 
+# City / airport name -> main IATA code. Used to normalize LLM output and as the
+# heuristic-path extractor when the LLM is unavailable.
+CITY_TO_IATA = {
+    "bangalore": "BLR", "bengaluru": "BLR", "mumbai": "BOM", "bombay": "BOM",
+    "delhi": "DEL", "new delhi": "DEL", "goa": "GOI", "chennai": "MAA",
+    "hyderabad": "HYD", "kolkata": "CCU", "pune": "PNQ", "ahmedabad": "AMD",
+    "kochi": "COK", "cochin": "COK", "jaipur": "JAI",
+    "dubai": "DXB", "abu dhabi": "AUH", "london": "LHR", "singapore": "SIN",
+    "new york": "JFK", "paris": "CDG", "bangkok": "BKK", "tokyo": "NRT",
+    "maldives": "MLE", "male": "MLE", "sydney": "SYD", "hong kong": "HKG",
+    "frankfurt": "FRA", "amsterdam": "AMS", "istanbul": "IST", "doha": "DOH",
+    "colombo": "CMB", "kathmandu": "KTM",
+}
+
+
+def _to_iata(value: str | None) -> str | None:
+    """Normalize a city name or code to a 3-letter IATA code."""
+    if not value:
+        return None
+    v = value.strip()
+    if len(v) == 3 and v.isalpha():
+        return v.upper()
+    return CITY_TO_IATA.get(v.lower())
+
+
 _EXPIRY = ["expir", "losing", "lose", "about to", "deadline", "running out", "before i lose"]
 _TRANSFER = ["transfer", "convert", "miles", "airline", "krisflyer", "vistara",
              "marriott", "bonvoy", "accor", "maharaja", "frequent flyer"]
@@ -44,6 +69,9 @@ async def extract_intent(message: str) -> Intent:
                 card_id=parsed.get("card_id"),
                 category=parsed.get("category"),
                 urgency=bool(parsed.get("urgency", False)),
+                origin=_to_iata(parsed.get("origin")),
+                destination=_to_iata(parsed.get("destination")),
+                depart_date=parsed.get("depart_date"),
             )
         except Exception:
             pass  # fall through to heuristic
@@ -52,6 +80,9 @@ async def extract_intent(message: str) -> Intent:
     card_id = next((cid for alias, cid in _CARD_ALIASES.items() if alias in text), None)
     category = next((cat for cat, hints in _CATEGORY_HINTS.items() if _match(text, hints)), None)
     urgency = _match(text, _EXPIRY)
+    # Only treat a city mention as a flight destination when flying is implied.
+    flying = _match(text, ["flight", "fly", "flights"])
+    destination = next((iata for city, iata in CITY_TO_IATA.items() if city in text), None) if flying else None
 
     if not text or (len(text) <= 12 and _match(text, _GREETING)):
         kind = "greeting"
@@ -67,4 +98,4 @@ async def extract_intent(message: str) -> Intent:
         kind = "unknown"
 
     return Intent(kind=kind, query=message or "", card_id=card_id,
-                  category=category, urgency=urgency)
+                  category=category, urgency=urgency, destination=destination)

@@ -17,12 +17,7 @@ Dimensions and default weights:
 
 from __future__ import annotations
 
-import logging
-from decimal import Decimal
-
 from . import db, transfer_partners_service, user_service
-
-log = logging.getLogger(__name__)
 
 WEIGHTS = {
     "financial": 0.35,
@@ -160,49 +155,6 @@ async def score_candidates(user_id: str, candidates: list, cards: list[dict]) ->
     for rank, c in enumerate(candidates, 1):
         c.rank = rank
     return candidates
-
-
-async def update_preferences(user_id: str, confirmed_category: str) -> None:
-    """Dynamic lifestyle learning: after a confirmed redemption, bump the chosen
-    category's preference weight (+0.10, capped 0.90) and renormalize all five
-    weights so they sum to exactly 1.000. Best-effort — callers wrap this so it
-    never breaks the redemption itself."""
-    col = CATEGORY_TO_PREF.get((confirmed_category or "").upper())
-    if col is None:
-        return
-
-    prefs = await user_service.get_preferences(user_id)
-    if prefs is None:
-        return
-
-    weights = {k: _f(prefs.get(k), 0.2) for k in _PREF_KEYS}
-    weights[col] = min(0.90, weights[col] + 0.10)
-
-    total = sum(weights.values()) or 1.0
-    normed = {k: round(v / total, 3) for k, v in weights.items()}
-
-    # Renormalization + rounding leaves float drift; absorb it into the largest
-    # weight so the five values sum to exactly 1.000.
-    drift = round(1.0 - sum(normed.values()), 3)
-    if drift:
-        largest = max(normed, key=normed.get)
-        normed[largest] = round(normed[largest] + drift, 3)
-
-    await db.execute(
-        """
-        UPDATE preferences
-           SET travel_weight=$2, dining_weight=$3, shopping_weight=$4,
-               cashback_weight=$5, experiences_weight=$6,
-               total_redemptions=total_redemptions+1, updated_at=NOW()
-         WHERE user_id=$1
-        """,
-        user_id,
-        Decimal(str(normed["travel_weight"])), Decimal(str(normed["dining_weight"])),
-        Decimal(str(normed["shopping_weight"])), Decimal(str(normed["cashback_weight"])),
-        Decimal(str(normed["experiences_weight"])),
-    )
-    log.info("lifestyle weights updated for %s (+%s -> %s): %s",
-             user_id, confirmed_category, col, normed)
 
 
 async def log_recommendation_events(user_id: str, session_id: str, candidates: list, top: int = 3) -> None:
