@@ -136,6 +136,10 @@ async def execute_redemption(user_id: str, candidate: dict,
         user_id, label,
     )
 
+    # Dynamic preference update
+    from .. import user_service
+    await user_service.update_preferences_after_redemption(user_id, candidate.get("category"))
+
     return {
         "status": "completed", "transaction_id": txn_id,
         "confirmation_reference": result.confirmation_reference,

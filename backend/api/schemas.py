@@ -21,6 +21,9 @@ class Intent(BaseModel):
     origin: Optional[str] = None
     destination: Optional[str] = None
     depart_date: Optional[str] = None
+    # Multi-turn conversation state — transient, not persisted in partial_intent.
+    is_complete: bool = True
+    follow_up_question: Optional[str] = None
 
 
 class FulfillmentOption(BaseModel):

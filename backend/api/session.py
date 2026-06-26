@@ -17,6 +17,44 @@ from typing import Any
 SESSION_TTL_SECONDS = 60 * 60  # 1 hour
 _MAX_TURNS = 40
 
+# Fields that must never be carried over from one turn's intent to the next.
+_TRANSIENT_INTENT_FIELDS = {"is_complete", "follow_up_question"}
+
+
+def merge_partial_intent(old: dict, new: dict) -> dict:
+    """Merge a freshly extracted intent dict over a stored partial intent.
+
+    Precedence rules:
+    - kind: new wins unless it is "unknown" (old preserved so context isn't lost)
+    - urgency: once True, stays True (OR semantics)
+    - query: accumulate across turns so the orchestrator's semantic search and
+      the rerank LLM see the FULL gathered context (e.g. "nice dinner ...
+      anniversary ... Italian"), not just the latest one-word answer. Details
+      like cuisine/occasion live ONLY in the raw text, so dropping prior turns
+      would lose them.
+    - all other fields: new non-null / non-empty value wins; otherwise keep old
+    - transient completeness flags are never carried forward
+    """
+    merged = {k: v for k, v in old.items() if k not in _TRANSIENT_INTENT_FIELDS}
+    for key, val in new.items():
+        if key in _TRANSIENT_INTENT_FIELDS:
+            continue
+        if key == "kind":
+            if val and val != "unknown":
+                merged[key] = val
+        elif key == "urgency":
+            merged[key] = merged.get(key, False) or bool(val)
+        elif key == "query":
+            old_q = (merged.get("query") or "").strip()
+            new_q = (val or "").strip()
+            if new_q and new_q.lower() not in old_q.lower():
+                merged[key] = f"{old_q} {new_q}".strip()
+            else:
+                merged[key] = old_q or new_q
+        elif val is not None and val != "":
+            merged[key] = val
+    return merged
+
 
 class SessionStore:
     def __init__(self) -> None:

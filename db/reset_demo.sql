@@ -70,7 +70,9 @@ VALUES
 
 -- ------------------------------------------------------------
 -- 5. Reset Riya's preferences to seed baseline
---    (travel_weight 0.350 — gets bumped to 0.550 live during demo)
+--    Travel-leaning profile (see seed_demo_portfolio.sql) — the
+--    contrast vs Samyak's dining-leaning profile is the demo's point.
+--    travel_weight 0.500 may bump higher live during the demo.
 -- ------------------------------------------------------------
 UPDATE preferences SET
     destination_type           = 'beach',
@@ -79,10 +81,10 @@ UPDATE preferences SET
     accommodation_tier         = '4star',
     flight_preference          = 'direct',
     departure_preference       = 'morning',
-    travel_weight              = 0.350,
-    dining_weight              = 0.300,
+    travel_weight              = 0.500,
+    dining_weight              = 0.180,
     shopping_weight            = 0.150,
-    cashback_weight            = 0.100,
+    cashback_weight            = 0.070,
     experiences_weight         = 0.100,
     value_sensitivity_threshold = 0.4000,
     total_redemptions          = 2,

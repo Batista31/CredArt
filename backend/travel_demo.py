@@ -25,19 +25,7 @@ BASE = "http://127.0.0.1:8001"
 RIYA = "00000000-0000-0000-0000-000000000002"
 
 
-def _build_query() -> str:
-    print("Enter flight details (press Enter to use defaults)")
-    dest = input("  Destination city [Dubai]: ").strip() or "Dubai"
-    origin = input("  Origin city     [leave blank = auto from profile]: ").strip()
-    date_hint = input("  When?           [next month]: ").strip() or "next month"
-    query = f"Book me a flight to {dest}"
-    if origin:
-        query += f" from {origin}"
-    query += f" {date_hint}"
-    return query
-
-
-QUERY = _build_query()
+QUERY = input("Riya: ").strip() or "Book me a flight to Dubai next month"
 
 
 def line(c: str = "=") -> None:
@@ -61,22 +49,29 @@ def main() -> None:
               f"depart_date={intent['depart_date']}")
 
         print(f"\n[2] CANDIDATES BUILT ({len(chat['candidates'])} total):")
-        flight = None
+        travel = None
         for c in chat["candidates"]:
             tag = ""
-            if c["label"].startswith("Flight"):
-                flight = c
-                tag = "  <-- first-class flight candidate"
+            if c["label"].startswith("Flight") or c["label"].startswith("Hotel"):
+                travel = c
+                tag = "  <-- first-class travel candidate"
             cost = f"{c['points_cost']:,}pts" if c["points_cost"] else "perk"
             print(f"    #{c['rank']} {c['label']:<28} {c['card_name']:<13} {cost}{tag}")
 
-        if not flight:
-            print("\n    no flight candidate built — check intent.destination")
+        if not travel:
+            print("\n    no travel candidate built — mention a city and flight/hotel intent")
             return
-        print(f"\n    route carried on candidate: "
-              f"{flight['origin']}->{flight['destination']} date={flight['depart_date']}")
+
+        kind = "hotel" if travel["label"].startswith("Hotel") else "flight"
+        if kind == "flight":
+            print(f"\n    route: {travel['origin']}→{travel['destination']}  depart={travel['depart_date']}")
+            provider_id = "duffel_flight"
+        else:
+            print(f"\n    hotel in: {travel['destination']}  check_in={travel['check_in']}  check_out={travel['check_out']}")
+            provider_id = "duffel_stays"
+
         print("    fulfillment options:")
-        for o in flight["fulfillment_options"]:
+        for o in travel["fulfillment_options"]:
             flag = "available" if o["available"] else "unavailable"
             print(f"      - [{o['mode']}] {o['provider_id']:<20} ({flag})")
 
@@ -84,12 +79,12 @@ def main() -> None:
         print(f"    {chat['reply']}")
 
         line()
-        print("RIYA CONFIRMS -> one-click redeem via Duffel (live test)")
+        print(f"RIYA CONFIRMS -> one-click redeem via Duffel ({kind}) (live test)")
         line()
         r2 = client.post(f"{BASE}/redeem", json={
             "user_id": RIYA, "session_id": sid,
-            "candidate_id": flight["candidate_id"],
-            "provider_id": "duffel_flight", "mode": "live",
+            "candidate_id": travel["candidate_id"],
+            "provider_id": provider_id, "mode": "live",
             "traveler": {"given_name": "Riya", "family_name": "Sharma",
                          "email": "riya@example.com", "phone": "+919000000000"},
         })

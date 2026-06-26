@@ -10,14 +10,18 @@ from __future__ import annotations
 from .base import RedemptionProvider
 from .demo_provider import DemoProvider
 from .duffel_provider import DuffelProvider
+from .tango_provider import TangoProvider
 from .website_hotel_provider import hotel_providers
 
 # Instantiate once. Availability is read live from env at construction.
 _DEMO = DemoProvider()
 _DUFFEL = DuffelProvider()
+_TANGO = TangoProvider()
 _HOTELS = hotel_providers()
 
-_ALL: dict[str, RedemptionProvider] = {p.provider_id: p for p in [_DEMO, _DUFFEL, *_HOTELS]}
+_ALL: dict[str, RedemptionProvider] = {p.provider_id: p for p in [_DEMO, _DUFFEL, _TANGO, *_HOTELS]}
+
+_VOUCHER_CATEGORIES = {"SHOPPING", "ENTERTAINMENT", "DINING"}
 
 
 def get_provider(provider_id: str) -> RedemptionProvider | None:
@@ -28,6 +32,8 @@ def _live_for(candidate: dict) -> list[RedemptionProvider]:
     category = (candidate.get("category") or "").upper()
     if category == "TRAVEL":
         return [*_HOTELS, _DUFFEL]
+    if category in _VOUCHER_CATEGORIES:
+        return [_TANGO]
     return []
 
 

@@ -39,6 +39,19 @@
   },
 
   {
+    "card_name": "Infinia",
+    "partner_name": "Accor Live Limitless",
+    "partner_type": "Hotel",
+    "transfer_ratio": "1:1",
+    "minimum_transfer_points": 1000,
+    "processing_days": 4,
+    "reversible": false,
+    "estimated_value_per_point_inr": 1.0,
+    "best_use_case": "Premium European hotel stays",
+    "source_url": "https://www.hdfcbank.com/personal/pay/cards/credit-cards/infinia-credit-card"
+  },
+
+  {
     "card_name": "Regalia Gold",
     "partner_name": "Club Vistara",
     "partner_type": "Airline",
@@ -62,5 +75,57 @@
     "estimated_value_per_point_inr": 0.9,
     "best_use_case": "Mid-range hotel stays",
     "source_url": "https://www.hdfcbank.com/personal/pay/cards/credit-cards/regalia-gold-credit-card"
+  },
+
+  {
+    "card_name": "Regalia Gold",
+    "partner_name": "IHG One Rewards",
+    "partner_type": "Hotel",
+    "transfer_ratio": "2:1",
+    "minimum_transfer_points": 2000,
+    "processing_days": 4,
+    "reversible": false,
+    "estimated_value_per_point_inr": 0.85,
+    "best_use_case": "Holiday Inn and Crowne Plaza stays",
+    "source_url": "https://www.hdfcbank.com/personal/pay/cards/credit-cards/regalia-gold-credit-card"
+  },
+
+  {
+    "card_name": "Regalia Gold",
+    "partner_name": "IndiGo BluChip",
+    "partner_type": "Airline",
+    "transfer_ratio": "3:1",
+    "minimum_transfer_points": 3000,
+    "processing_days": 3,
+    "reversible": false,
+    "estimated_value_per_point_inr": 0.8,
+    "best_use_case": "Low-cost domestic flights",
+    "source_url": "https://www.hdfcbank.com/personal/pay/cards/credit-cards/regalia-gold-credit-card"
+  },
+
+  {
+    "card_name": "Millennia",
+    "partner_name": "Marriott Bonvoy",
+    "partner_type": "Hotel",
+    "transfer_ratio": "4:1",
+    "minimum_transfer_points": 4000,
+    "processing_days": 5,
+    "reversible": false,
+    "estimated_value_per_point_inr": 0.6,
+    "best_use_case": "Occasional hotel stays",
+    "source_url": "https://www.hdfcbank.com/personal/pay/cards/credit-cards/millennia-credit-card"
+  },
+
+  {
+    "card_name": "Millennia",
+    "partner_name": "IndiGo BluChip",
+    "partner_type": "Airline",
+    "transfer_ratio": "4:1",
+    "minimum_transfer_points": 4000,
+    "processing_days": 3,
+    "reversible": false,
+    "estimated_value_per_point_inr": 0.55,
+    "best_use_case": "Budget domestic flights",
+    "source_url": "https://www.hdfcbank.com/personal/pay/cards/credit-cards/millennia-credit-card"
   }
 ]

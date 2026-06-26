@@ -69,7 +69,20 @@ async def chat(req: ChatRequest):
     session = await store.load(req.session_id)
     await store.append_turn(session, "user", req.message)
 
-    intent = await extract_intent(req.message)
+    intent = await extract_intent(
+        req.message,
+        conversation_history=session.get("turns", []),
+        partial_intent=session.get("partial_intent"),
+    )
+
+    # Persist or clear partial intent depending on whether we need another turn.
+    if not intent.is_complete:
+        session["partial_intent"] = intent.model_dump(
+            exclude={"is_complete", "follow_up_question"}
+        )
+    else:
+        session.pop("partial_intent", None)
+
     cards = await user_service.get_user_cards(req.user_id)
     candidates, trace, meta = await orchestrate(intent, user, cards)
 

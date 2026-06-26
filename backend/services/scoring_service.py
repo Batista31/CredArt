@@ -87,15 +87,28 @@ async def _confirm_rates(user_id: str) -> dict[str, float]:
     return {k: (v["confirmed"] / v["total"]) for k, v in agg.items() if v["total"]}
 
 
-def _lifestyle(cand, prefs: dict, max_pref: float) -> float:
+# How strongly the current request's category steers ranking. Applied to the
+# lifestyle dimension (weight 0.25), so a full ±25 swing moves the total by ~6.
+_CATEGORY_RELEVANCE = 25.0
+
+
+def _lifestyle(cand, prefs: dict, max_pref: float, intent_category: str | None = None) -> float:
     """Preference-category fit, blended with semantic relevance when the
-    candidate came from a search (so a directly-matched reward isn't buried)."""
+    candidate came from a search (so a directly-matched reward isn't buried),
+    then nudged by how well the candidate matches the CURRENT request's category
+    (so a dining ask surfaces dining rewards, not whatever the user usually likes)."""
     key = CATEGORY_TO_PREF.get((cand.category or "").upper(), "experiences_weight")
     w = _f(prefs.get(key), 0.2)
     pref_score = min(100.0, 100.0 * w / max_pref) if max_pref else 50.0
+    score = pref_score
     if cand.similarity is not None:
-        return round(0.5 * pref_score + 0.5 * (cand.similarity * 100), 1)
-    return pref_score
+        score = 0.5 * pref_score + 0.5 * (cand.similarity * 100)
+    if intent_category:
+        if (cand.category or "").upper() == intent_category.upper():
+            score = min(100.0, score + _CATEGORY_RELEVANCE)
+        else:
+            score = max(0.0, score - _CATEGORY_RELEVANCE)
+    return round(score, 1)
 
 
 def _redemption_prob(cand, rates: dict, prefs: dict) -> float:
@@ -123,8 +136,13 @@ def _expiry_risk(days: int | None) -> float:
     return 15.0
 
 
-async def score_candidates(user_id: str, candidates: list, cards: list[dict]) -> list:
-    """Attach 5-dim scores + total, sort desc, set rank. Mutates+returns list."""
+async def score_candidates(user_id: str, candidates: list, cards: list[dict],
+                           intent_category: str | None = None) -> list:
+    """Attach 5-dim scores + total, sort desc, set rank. Mutates+returns list.
+
+    `intent_category` is the current request's category (e.g. DINING); when set,
+    candidates in that category are boosted and off-category ones dampened so the
+    ranking reflects what the user is asking for right now."""
     if not candidates:
         return candidates
 
@@ -138,7 +156,7 @@ async def score_candidates(user_id: str, candidates: list, cards: list[dict]) ->
 
     for i, c in enumerate(candidates):
         c.score_financial = round(fin[i], 1)
-        c.score_lifestyle = round(_lifestyle(c, prefs, max_pref), 1)
+        c.score_lifestyle = round(_lifestyle(c, prefs, max_pref, intent_category), 1)
         c.score_redemption_prob = round(_redemption_prob(c, rates, prefs), 1)
         c.score_expiry_risk = round(_expiry_risk(days_of.get(c.card_id)), 1)
         c.score_flexibility = round(FLEXIBILITY.get(c.kind, 50.0), 1)

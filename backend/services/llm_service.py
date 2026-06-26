@@ -53,6 +53,64 @@ Rules:
   absolute YYYY-MM-DD using the current date provided below. Else null.
 """
 
+_COMPLETENESS_SYSTEM = """You are a conversational intent-gathering assistant for CredArt, a credit card rewards concierge.
+
+Your goal is to collect ALL the important details needed to give a truly personalised recommendation. A recommendation made without key context is generic — not useful. Only surface results once you have everything that meaningfully changes what to recommend.
+
+Intent kinds that are ALWAYS complete (never ask anything):
+  greeting, check_expiry, transfer, unknown
+
+For all other intents, gather the following before marking complete.
+Check the conversation history carefully — skip any question already answered.
+
+TRAVEL — flights (destination is set, or user mentioned flying/flight/trip):
+  Gather in order of importance:
+  1. Destination — where are they flying to?
+  2. Travel date — when do they want to fly? (departure date only — do NOT ask about return date or return flights)
+  3. Number of passengers — how many people are travelling?
+  4. Cabin class — economy, business, or first class?
+
+TRAVEL — general (no explicit flight, user asking about travel benefits/hotels/lounges):
+  Always complete — show transfer partners and travel perks.
+
+DINING:
+  Gather in order of importance:
+  1. Date and time — when are they planning to dine?
+  2. Party size — how many people?
+  3. Occasion — birthday, anniversary, date night, business, casual? (ONLY mark this answered if the user explicitly stated an occasion; "Italian" is NOT an occasion)
+  4. Cuisine preference — any specific cuisine in mind? (ONLY mark this answered if the user named a cuisine like Italian, Indian, Chinese, Continental etc.; "Anniversary" is NOT a cuisine)
+
+SHOPPING:
+  Gather in order of importance:
+  1. What they want to buy — specific item or category?
+  2. Budget — how much are they looking to spend?
+  3. Brand preference — any preferred brands?
+
+ENTERTAINMENT (movies, concerts, events, shows):
+  Gather in order of importance:
+  1. Type — movie, concert, sports, theatre?
+  2. Date — when?
+  3. Number of people — how many tickets?
+
+WELLNESS (gym, spa, fitness, health):
+  Gather in order of importance:
+  1. Type of activity — gym membership, spa, yoga, physiotherapy?
+  2. Location preference — which area or city?
+
+Rules:
+  1. NEVER ask for information already present in the conversation history.
+  2. Ask ONE question per turn — the next most important missing piece from the list above.
+  3. Be friendly and natural — one short sentence, the way a human concierge would ask.
+  4. If is_complete is true, follow_up_question MUST be null.
+  5. Do NOT mark complete until all the listed fields for that category have been gathered.
+
+Return ONLY valid JSON — no markdown, no explanation:
+{
+  "is_complete": true or false,
+  "follow_up_question": "<one sentence, or null>"
+}
+"""
+
 _RERANK_SYSTEM = """You are CredArt's recommendation engine. You receive a ranked candidate list (already scored by a deterministic engine) and the user's message, and you write a concise, helpful reply.
 
 Rules — STRICTLY enforced:
@@ -128,10 +186,17 @@ async def _llm_call(system: str, user: str) -> tuple[str, bool]:
     raise RuntimeError("No LLM API key available (GROQ_API_KEY or GEMINI_API_KEY required)")
 
 
-async def llm_extract_intent(message: str) -> dict | None:
+async def llm_extract_intent(message: str, conversation_history: list[dict] | None = None) -> dict | None:
     """Returns parsed intent dict or None on failure (caller falls back to heuristic)."""
     from datetime import date
-    system = f"{_INTENT_SYSTEM}\n\nThe current date is {date.today().isoformat()}."
+    context = ""
+    if conversation_history:
+        lines = "\n".join(
+            f"{t['role'].upper()}: {t['content']}"
+            for t in conversation_history[-6:]
+        )
+        context = f"\n\nPrior conversation (use this to understand what the current message is answering):\n{lines}"
+    system = f"{_INTENT_SYSTEM}{context}\n\nThe current date is {date.today().isoformat()}."
     try:
         raw, _ = await _llm_call(system, message)
         # Strip markdown fences if model wraps in ```json
@@ -150,3 +215,29 @@ async def llm_rerank_reply(
     """Returns (reply_text, groq_used). Falls back to None — caller uses template reply."""
     payload = _candidates_to_json(candidates, user_name, user_message)
     return await _llm_call(_RERANK_SYSTEM, payload)
+
+
+async def llm_check_completeness(
+    intent: dict,
+    conversation_history: list[dict],
+) -> tuple[bool, str | None]:
+    """Returns (is_complete, follow_up_question). Fallback: (True, None) on any error."""
+    payload = json.dumps({
+        "intent": intent,
+        "conversation": [
+            {"role": t["role"], "content": t["content"]}
+            for t in conversation_history[-16:]
+        ],
+    }, ensure_ascii=False)
+    try:
+        raw, _ = await _llm_call(_COMPLETENESS_SYSTEM, payload)
+        raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        data = json.loads(raw)
+        is_complete = bool(data.get("is_complete", True))
+        follow_up = data.get("follow_up_question") or None
+        if not is_complete and not follow_up:
+            return True, None  # no question to ask → treat as complete
+        return is_complete, follow_up
+    except Exception as e:
+        print(f"[llm] completeness check failed ({e}), treating as complete")
+        return True, None
