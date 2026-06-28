@@ -13,7 +13,10 @@ from . import db
 
 async def get_user(user_id: str) -> dict | None:
     return await db.fetchrow(
-        "SELECT id AS user_id, name, email, city, state FROM users WHERE id = $1",
+        """
+        SELECT id AS user_id, name, email, phone, date_of_birth, city, state, country
+          FROM users WHERE id = $1
+        """,
         user_id,
     )
 
@@ -48,7 +51,9 @@ async def get_preferences(user_id: str) -> dict | None:
                flight_preference, departure_preference,
                travel_weight, dining_weight, shopping_weight, cashback_weight,
                experiences_weight, value_sensitivity_threshold,
-               total_redemptions, total_dismissals
+               total_redemptions, total_dismissals,
+               preferred_airlines, preferred_hotel_chains, preferred_cuisines,
+               dietary_restrictions, family_size
           FROM preferences WHERE user_id = $1
         """,
         user_id,

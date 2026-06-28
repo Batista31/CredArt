@@ -100,6 +100,17 @@ class Traveler(BaseModel):
     phone: str = "+919000000000"
 
 
+class Address(BaseModel):
+    """A saved/supplied delivery address (CMR). `label` is Home/Office etc."""
+    label: str = "Home"
+    address_line1: str
+    address_line2: Optional[str] = None
+    city: str
+    state: Optional[str] = None
+    pincode: str
+    is_default: Optional[bool] = None
+
+
 class RedeemRequest(BaseModel):
     user_id: str
     session_id: str
@@ -108,6 +119,9 @@ class RedeemRequest(BaseModel):
     mode: Literal["demo", "production"] = "demo"
     consent: bool = False  # required for any production (real) booking
     traveler: Optional[Traveler] = None
+    # CMR — for physical goods, an address supplied inline (saved for next time).
+    # If omitted, the user's saved default address is used.
+    delivery_address: Optional[Address] = None
 
 
 class RedeemStep(BaseModel):
@@ -117,7 +131,7 @@ class RedeemStep(BaseModel):
 
 
 class RedeemResponse(BaseModel):
-    status: Literal["completed", "failed", "otp_required"]
+    status: Literal["completed", "failed", "otp_required", "address_required"]
     transaction_id: str
     confirmation_reference: Optional[str] = None
     provider_id: str
@@ -132,6 +146,10 @@ class RedeemResponse(BaseModel):
     booking_session_id: Optional[str] = None
     steps: list[RedeemStep] = Field(default_factory=list)
     rollback_reason: Optional[str] = None
+    # CMR — physical goods delivery. `address_required` asks for a shipping
+    # address conversationally; `delivery_address` echoes where it shipped.
+    address_prompt: Optional[str] = None
+    delivery_address: Optional[Address] = None
 
 
 class OtpRequest(BaseModel):
@@ -148,3 +166,32 @@ class BookingSessionResponse(BaseModel):
     otp_deadline: float
     confirmation_reference: Optional[str] = None
     error_message: Optional[str] = None
+
+
+# --- CMR (Customer Master Record) request models ---
+
+class AddressRequest(Address):
+    """Save a delivery address for a user."""
+    user_id: str
+    make_default: bool = False
+
+
+class WishlistRequest(BaseModel):
+    """Add a benefit to the user's wishlist. Either resolve it from a session
+    candidate (session_id + candidate_id) or pass the label directly."""
+    user_id: str
+    session_id: Optional[str] = None
+    candidate_id: Optional[str] = None
+    label: Optional[str] = None
+    card_id: Optional[str] = None
+    category: Optional[str] = None
+
+
+class DismissRequest(BaseModel):
+    """Dismiss a benefit so it never recurs. Resolve from a session candidate
+    (session_id + candidate_id) or pass the label directly."""
+    user_id: str
+    session_id: Optional[str] = None
+    candidate_id: Optional[str] = None
+    label: Optional[str] = None
+    card_id: Optional[str] = None

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from services import bank_mcp_client, scoring_service
+from services import bank_mcp_client, cmr_service, scoring_service, user_service
 from services.redemption import registry
 
 from .schemas import Candidate, FulfillmentOption, Intent, ToolCall
@@ -140,8 +140,25 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
                     effective_value_inr=float(p["effective_value_inr"]) if p["effective_value_inr"] is not None else None,
                     best_use_case=p["best_use_case"], source_url=p["source_url"]))
 
-    # --- Phase 6: deterministic 5-dimension scoring + rank ---
-    candidates = await scoring_service.score_candidates(user["user_id"], candidates, cards)
+    # --- CMR: fetch the user's profile signals (Layer 1, never sent to the LLM) ---
+    uid = user["user_id"]
+    prefs = await user_service.get_preferences(uid) or {}
+    wishlist = await cmr_service.get_wishlist_labels(uid)
+    dismissed = await cmr_service.get_dismissed_labels(uid)
+
+    # Filter out dismissed benefits BEFORE scoring — a rejected item must never
+    # resurface for this user.
+    if dismissed:
+        before = len(candidates)
+        candidates = [c for c in candidates if c.label not in dismissed]
+        if before != len(candidates):
+            trace.append(ToolCall(tool="cmr_filter_dismissed",
+                                  args={"removed": before - len(candidates)},
+                                  result_count=len(candidates)))
+
+    # --- Phase 6: deterministic 5-dimension scoring + rank (+ CMR boost) ---
+    candidates = await scoring_service.score_candidates(
+        uid, candidates, cards, prefs=prefs, wishlist_labels=wishlist)
     if candidates:
         trace.append(ToolCall(tool="score_candidates", args={"dims": 5},
                               result_count=len(candidates)))
@@ -165,6 +182,15 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
             print(f"[orchestrator] LLM rerank failed ({e}), using template")
 
     reply = llm_reply or _templated_reply(intent, user, candidates, soonest)
+
+    # --- CMR completeness check: confirm pre-filled profile values naturally so
+    # we don't re-ask known facts (party size, dietary needs). This note is built
+    # DETERMINISTICALLY from CMR data and appended OUTSIDE the LLM — the LLM never
+    # receives CMR, preserving the anti-hallucination boundary. ---
+    note = cmr_service.prefill_note(prefs, intent)
+    if note and candidates:
+        reply = f"{reply} {note}"
+
     meta = {
         "soonest_expiry": soonest[0]["card_id"] if soonest else None,
         "llm_used": llm_used,
