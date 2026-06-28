@@ -1,5 +1,5 @@
 -- ============================================================
--- Migration 0011 — Customer Master Record (CMR)
+-- Migration 0012 — Customer Master Record (CMR)
 --
 -- A single unified profile of a user beyond cards + points, so CredArt
 -- stops re-asking known facts and can make smarter, deliverable
