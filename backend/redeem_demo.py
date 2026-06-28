@@ -1,10 +1,4 @@
-"""End-to-end one-click redemption demo (Phase 9).
-
-Requires the backend running on :8001 (and ideally the bank MCP on :8000).
-Run reset_demo.sql first so balances are at spec.
-
-    .venv\\Scripts\\python redeem_demo.py
-"""
+"""End-to-end one-click redemption demo (Phase 9)."""
 
 from __future__ import annotations
 
@@ -19,68 +13,73 @@ RIYA = "00000000-0000-0000-0000-000000000002"
 
 
 def _cards(client: httpx.Client) -> dict[str, int]:
-    r = client.get(f"{BASE}/cards/{RIYA}")
-    r.raise_for_status()
-    return {c["card_id"]: c["current_points"] for c in r.json()["cards"]}
+    response = client.get(f"{BASE}/cards/{RIYA}")
+    response.raise_for_status()
+    return {card["card_id"]: card["current_points"] for card in response.json()["cards"]}
 
 
 def main() -> None:
     with httpx.Client(timeout=60) as client:
-        # 1. Chat to produce a redeemable TRAVEL candidate.
-        r = client.post(f"{BASE}/chat", json={
+        response = client.post(f"{BASE}/chat", json={
             "user_id": RIYA,
             "message": "I want to book a weekend hotel stay in the mountains",
         })
-        r.raise_for_status()
-        chat = r.json()
-        sid = chat["session_id"]
-        redeemables = [c for c in chat["candidates"]
-                       if c["kind"] in ("redemption", "perk") and c["fulfillment_options"]]
+        response.raise_for_status()
+        chat = response.json()
+        session_id = chat["session_id"]
+        redeemables = [
+            candidate for candidate in chat["candidates"]
+            if candidate["kind"] in ("redemption", "perk") and candidate["fulfillment_options"]
+        ]
         assert redeemables, "no redeemable candidate with fulfillment options"
-        # Prefer a candidate with a real points cost so the demo deduction is visible.
-        redeemables.sort(key=lambda c: c.get("points_cost") or 0, reverse=True)
-        cand = redeemables[0]
-        print(f"session {sid}")
-        print(f"candidate: {cand['label']} ({cand['card_name']}) "
-              f"cost={cand['points_cost']} id={cand['candidate_id']}")
+        redeemables.sort(key=lambda candidate: candidate.get("points_cost") or 0, reverse=True)
+        candidate = redeemables[0]
+        print(f"session {session_id}")
+        print(f"candidate: {candidate['label']} ({candidate['card_name']}) "
+              f"cost={candidate['points_cost']} id={candidate['candidate_id']}")
         print("fulfillment options:")
-        for o in cand["fulfillment_options"]:
-            flag = "available" if o["available"] else f"unavailable — {o['note']}"
-            print(f"  - [{o['mode']}] {o['provider_id']}: {o['label']} ({flag})")
+        for option in candidate["fulfillment_options"]:
+            flag = "available" if option["available"] else f"unavailable — {option['note']}"
+            print(f"  - [{option['mode']}] {option['provider_id']}: {option['label']} ({flag})")
 
         before = _cards(client)
 
-        # 2. One-click DEMO redeem (always available, spends demo_points).
         print("\n--- DEMO redeem ---")
-        r = client.post(f"{BASE}/redeem", json={
-            "user_id": RIYA, "session_id": sid,
-            "candidate_id": cand["candidate_id"], "provider_id": "demo", "mode": "demo",
+        response = client.post(f"{BASE}/redeem", json={
+            "user_id": RIYA,
+            "session_id": session_id,
+            "candidate_id": candidate["candidate_id"],
+            "provider_id": "demo",
+            "mode": "demo",
         })
-        r.raise_for_status()
-        res = r.json()
-        for s in res["steps"]:
-            print(f"  {s['status']:>4} · {s['label']} — {s.get('detail')}")
-        print(f"status={res['status']} ref={res['confirmation_reference']} "
-              f"used={res['points_used']} {res['currency']} demo_balance_after={res['balance_after']}")
+        response.raise_for_status()
+        result = response.json()
+        for step in result["steps"]:
+            print(f"  {step['status']:>4} · {step['label']} — {step.get('detail')}")
+        print(f"status={result['status']} ref={result['confirmation_reference']} "
+              f"used={result['points_used']} {result['currency']} demo_balance_after={result['balance_after']}")
 
         after = _cards(client)
-        assert after[cand["card_id"]] == before[cand["card_id"]], \
+        assert after[candidate["card_id"]] == before[candidate["card_id"]], (
             "REAL points must be untouched by a demo redemption!"
-        print(f"real current_points unchanged: {before[cand['card_id']]:,} -> {after[cand['card_id']]:,} ✓")
+        )
+        print(f"real current_points unchanged: {before[candidate['card_id']]:,} -> {after[candidate['card_id']]:,} ✓")
 
-        # 3. Production without consent -> expect a clean 400 (consent gate).
-        live = next((o for o in cand["fulfillment_options"] if o["mode"] == "live"), None)
+        live = next((option for option in candidate["fulfillment_options"] if option["mode"] == "live"), None)
         if live:
             print(f"\n--- PRODUCTION redeem without consent on '{live['provider_id']}' (expect 400) ---")
-            r = client.post(f"{BASE}/redeem", json={
-                "user_id": RIYA, "session_id": sid,
-                "candidate_id": cand["candidate_id"],
-                "provider_id": live["provider_id"], "mode": "production", "consent": False,
+            response = client.post(f"{BASE}/redeem", json={
+                "user_id": RIYA,
+                "session_id": session_id,
+                "candidate_id": candidate["candidate_id"],
+                "provider_id": live["provider_id"],
+                "mode": "production",
+                "consent": False,
             })
-            print(f"  HTTP {r.status_code}: {r.json().get('detail')}")
-            assert r.status_code == 400, "production without consent should 400"
+            print(f"  HTTP {response.status_code}: {response.json().get('detail')}")
+            assert response.status_code == 400, "production without consent should 400"
 
-        print("\n✅ Phase 9 one-click redemption OK")
+        print("\n✓ Phase 9 one-click redemption OK")
 
 
 if __name__ == "__main__":
