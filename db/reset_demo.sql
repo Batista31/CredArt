@@ -70,7 +70,9 @@ VALUES
 
 -- ------------------------------------------------------------
 -- 5. Reset Riya's preferences to seed baseline
---    (travel_weight 0.350 — gets bumped to 0.550 live during demo)
+--    Travel-leaning profile (see seed_demo_portfolio.sql) — the
+--    contrast vs Samyak's dining-leaning profile is the demo's point.
+--    travel_weight 0.500 may bump higher live during the demo.
 -- ------------------------------------------------------------
 UPDATE preferences SET
     destination_type           = 'beach',
@@ -79,10 +81,10 @@ UPDATE preferences SET
     accommodation_tier         = '4star',
     flight_preference          = 'direct',
     departure_preference       = 'morning',
-    travel_weight              = 0.350,
-    dining_weight              = 0.300,
+    travel_weight              = 0.500,
+    dining_weight              = 0.180,
     shopping_weight            = 0.150,
-    cashback_weight            = 0.100,
+    cashback_weight            = 0.070,
     experiences_weight         = 0.100,
     value_sensitivity_threshold = 0.4000,
     total_redemptions          = 2,
@@ -97,35 +99,5 @@ VALUES
 ('00000000-0000-0000-0000-000000000002', 'seed_session_001', 1, 'flight', 'IndiGo BLR–GOI round trip via SmartBuy', 78.0, 82.0, 90.0, 45.0, 70.0, 78.5, 0.35, 0.25, 0.20, 0.10, 0.10, 'confirmed', '[{"label": "Regalia Gold earn rate", "url": "https://www.hdfcbank.com/personal/pay/cards/credit-cards/regalia-gold-credit-card"}, {"label": "SmartBuy flights", "url": "https://smartbuy.hdfcbank.com"}]'),
 ('00000000-0000-0000-0000-000000000002', 'seed_session_001', 2, 'cashback', 'Statement credit — ₹500', 65.0, 30.0, 95.0, 40.0, 85.0, 61.5, 0.35, 0.25, 0.20, 0.10, 0.10, 'dismissed', NULL),
 ('00000000-0000-0000-0000-000000000002', 'seed_session_002', 1, 'hotel', 'Marriott Goa — 2 nights via Bonvoy transfer', 80.0, 88.0, 75.0, 60.0, 55.0, 77.0, 0.35, 0.25, 0.20, 0.10, 0.10, 'confirmed', '[{"label": "Marriott transfer ratio", "url": "https://www.hdfcbank.com/personal/tools-and-calculators/reward-points"}]');
-
--- ------------------------------------------------------------
--- 7. Reset Riya's CMR (Customer Master Record) to demo spec
---    city Mumbai · family_size 1 · prefers IndiGo · Home address ·
---    wishlist "Manali Weekend Stay" · dismissed "BookMyShow Voucher"
--- ------------------------------------------------------------
-UPDATE users
-   SET city = 'Mumbai', state = 'Maharashtra', date_of_birth = '1996-08-15'
- WHERE id = '00000000-0000-0000-0000-000000000002';
-
-UPDATE preferences
-   SET family_size            = 1,
-       preferred_airlines     = ARRAY['IndiGo']::TEXT[],
-       preferred_hotel_chains = '{}',
-       preferred_cuisines     = '{}',
-       dietary_restrictions   = '{}'
- WHERE user_id = '00000000-0000-0000-0000-000000000002';
-
-DELETE FROM user_addresses WHERE user_id = '00000000-0000-0000-0000-000000000002';
-INSERT INTO user_addresses (id, user_id, label, address_line1, city, state, pincode, is_default)
-VALUES ('00000000-0000-0000-0aff-000000000002', '00000000-0000-0000-0000-000000000002',
-        'Home', '12 Marine Drive', 'Mumbai', 'Maharashtra', '400020', TRUE);
-
-DELETE FROM cmr_wishlist WHERE user_id = '00000000-0000-0000-0000-000000000002';
-INSERT INTO cmr_wishlist (user_id, label, card_id, category)
-VALUES ('00000000-0000-0000-0000-000000000002', 'Manali Weekend Stay', 'hdfc_regalia_gold', 'TRAVEL');
-
-DELETE FROM cmr_dismissed WHERE user_id = '00000000-0000-0000-0000-000000000002';
-INSERT INTO cmr_dismissed (user_id, label, card_id)
-VALUES ('00000000-0000-0000-0000-000000000002', 'BookMyShow Voucher', 'hdfc_regalia_gold');
 
 COMMIT;

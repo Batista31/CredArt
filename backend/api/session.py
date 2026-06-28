@@ -81,3 +81,40 @@ class SessionStore:
         ]
         for sid in expired:
             self._sessions.pop(sid, None)
+
+
+# ---------------------------------------------------------------------------
+# Multi-turn intent merging (duffel multi-turn flight intent)
+# ---------------------------------------------------------------------------
+
+_TRANSIENT_INTENT_FIELDS = {"is_complete", "follow_up_question"}
+
+
+def merge_partial_intent(old: dict, new: dict) -> dict:
+    """Merge a freshly extracted intent dict over a stored partial intent.
+
+    - kind: new wins unless "unknown"
+    - urgency: OR semantics (once True stays True)
+    - query: accumulated across turns so LLM sees full gathered context
+    - all other fields: new non-null value wins; otherwise keep old
+    - transient completeness flags never carried forward
+    """
+    merged = {k: v for k, v in old.items() if k not in _TRANSIENT_INTENT_FIELDS}
+    for key, val in new.items():
+        if key in _TRANSIENT_INTENT_FIELDS:
+            continue
+        if key == "kind":
+            if val and val != "unknown":
+                merged[key] = val
+        elif key == "urgency":
+            merged[key] = merged.get(key, False) or bool(val)
+        elif key == "query":
+            old_q = (merged.get("query") or "").strip()
+            new_q = (val or "").strip()
+            if new_q and new_q.lower() not in old_q.lower():
+                merged[key] = f"{old_q} {new_q}".strip()
+            else:
+                merged[key] = old_q or new_q
+        elif val is not None and val != "":
+            merged[key] = val
+    return merged

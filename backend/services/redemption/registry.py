@@ -9,20 +9,24 @@ from .base import RedemptionProvider
 from .bank_internal_provider import BankInternalProvider
 from .demo_provider import DemoProvider
 from .duffel_provider import DuffelProvider
+from .tango_provider import TangoProvider
 from .voucher_provider import VoucherProvider
 from .website_hotel_provider import hotel_providers
 
 _DEMO = DemoProvider()
 _DUFFEL = DuffelProvider()
 _VOUCHER = VoucherProvider()
+_TANGO = TangoProvider()
 _ASSISTED = AssistedCheckoutProvider()
 _BANK = BankInternalProvider()
 _HOTELS = hotel_providers()
 
 _ALL: dict[str, RedemptionProvider] = {
     provider.provider_id: provider
-    for provider in [_DEMO, _DUFFEL, _VOUCHER, _ASSISTED, _BANK, *_HOTELS]
+    for provider in [_DEMO, _DUFFEL, _VOUCHER, _TANGO, _ASSISTED, _BANK, *_HOTELS]
 }
+
+_TANGO_RE = re.compile(r"shopping|dining|entertainment|gift card|e-gift|digital voucher")
 
 _HOTEL_RE = re.compile(r"stay|hotel|resort|palace|houseboat|villa|span|novotel|rambagh|holiday|marriott")
 _BANK_RE = re.compile(r"dining credit|thali|sadya|himachali|coastal|lounge|milestone|activation")
@@ -38,6 +42,8 @@ def _live_provider_for(candidate: dict) -> RedemptionProvider:
     if candidate.get("kind") == "transfer":
         return _BANK
     name = ((candidate.get("label") or "") + " " + (candidate.get("category") or "")).lower()
+    if _TANGO_RE.search(name):
+        return _TANGO
     if _VOUCHER_RE.search(name):
         return _VOUCHER
     if _HOTEL_RE.search(name):

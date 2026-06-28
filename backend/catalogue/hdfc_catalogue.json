@@ -13,7 +13,7 @@
       {
         "category": "TRAVEL",
         "title": "Unlimited Lounge Access",
-        "description": "Unlimited domestic and international airport lounge access.",
+        "description": "Unlimited domestic and international airport lounge access for you and a guest.",
         "points_cost": null,
         "verified": true
       },
@@ -26,6 +26,22 @@
         "verified": true
       },
       {
+        "category": "TRAVEL",
+        "title": "Maldives Overwater Villa Escape",
+        "description": "3-night stay in an overwater villa at a luxury Maldives resort with breakfast.",
+        "points_cost": 75000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "TRAVEL",
+        "title": "Business Class Companion Voucher",
+        "description": "Bring a companion on an international business class redemption at no extra points.",
+        "points_cost": 60000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
         "category": "DINING",
         "title": "ITC Dining Privileges",
         "description": "Exclusive dining discounts at participating ITC restaurants.",
@@ -33,10 +49,82 @@
         "verified": true
       },
       {
+        "category": "DINING",
+        "title": "Michelin Chef's Table Experience",
+        "description": "Curated multi-course chef's table tasting menu for two at a partner fine-dining restaurant.",
+        "points_cost": 28000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "DINING",
+        "title": "Club Marriott Membership",
+        "description": "Annual Club Marriott membership with up to 20% off dining across member hotels.",
+        "points_cost": 15000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "SHOPPING",
+        "title": "Tata CLiQ Luxury Voucher",
+        "description": "Luxury shopping voucher redeemable on Tata CLiQ Luxury for fashion and lifestyle brands.",
+        "points_cost": 25000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "SHOPPING",
+        "title": "Apple Store Gift Card",
+        "description": "Gift card redeemable across Apple products and accessories.",
+        "points_cost": 30000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "SHOPPING",
+        "title": "Tanishq Jewellery Voucher",
+        "description": "Jewellery voucher redeemable at Tanishq stores nationwide.",
+        "points_cost": 40000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "ENTERTAINMENT",
+        "title": "Private Screening Voucher",
+        "description": "Private movie screening for up to 10 guests at a partner PVR ICON property.",
+        "points_cost": 18000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "ENTERTAINMENT",
+        "title": "Premiere Concert Pass",
+        "description": "Priority-access pass to a marquee live concert or event via partner platforms.",
+        "points_cost": 12000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
         "category": "WELLNESS",
         "title": "Cult.fit Elite Membership",
         "description": "Complimentary annual Cult.fit Elite membership.",
         "points_cost": 30000,
+        "verified": true
+      },
+      {
+        "category": "WELLNESS",
+        "title": "Four Seasons Spa Day",
+        "description": "Full-day spa experience for two at a Four Seasons or equivalent luxury spa.",
+        "points_cost": 22000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "WELLNESS",
+        "title": "Comprehensive Health Checkup",
+        "description": "Premium annual full-body health checkup at a partner diagnostics chain.",
+        "points_cost": 18000,
+        "cash_component": 0,
         "verified": true
       }
     ],
@@ -87,6 +175,22 @@
         "verified": true
       },
       {
+        "category": "TRAVEL",
+        "title": "Goa Beach Resort 2-Night Stay",
+        "description": "2-night stay at a partner Goa beach resort with breakfast for two.",
+        "points_cost": 35000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "TRAVEL",
+        "title": "Vistara Flight Voucher",
+        "description": "Domestic flight voucher redeemable on Vistara economy fares.",
+        "points_cost": 28000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
         "category": "DINING",
         "title": "Taj Dining Voucher",
         "description": "Dining voucher redeemable at Taj Hotels.",
@@ -95,10 +199,98 @@
         "verified": true
       },
       {
+        "category": "DINING",
+        "title": "EazyDiner Prime + Dining Credit",
+        "description": "Annual EazyDiner Prime membership plus a ₹2,000 dining credit at partner restaurants.",
+        "points_cost": 8000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "DINING",
+        "title": "Barbeque Nation Buffet for 4",
+        "description": "Buffet dining voucher for four at Barbeque Nation outlets.",
+        "points_cost": 6000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "DINING",
+        "title": "Starbucks Annual Card",
+        "description": "Reloadable Starbucks card with a year of curated beverage offers.",
+        "points_cost": 5000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
         "category": "ENTERTAINMENT",
         "title": "BookMyShow Voucher",
         "description": "Voucher usable for movies, concerts and events.",
         "points_cost": 4000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "ENTERTAINMENT",
+        "title": "PVR Premium Tickets x4",
+        "description": "Four premium PVR movie tickets with recliner seating.",
+        "points_cost": 5000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "ENTERTAINMENT",
+        "title": "Live Event Priority Booking",
+        "description": "Priority booking plus voucher for a live concert, comedy or theatre show.",
+        "points_cost": 7000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "SHOPPING",
+        "title": "Myntra Fashion Voucher",
+        "description": "Fashion and apparel voucher redeemable on Myntra.",
+        "points_cost": 12000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "SHOPPING",
+        "title": "Croma Electronics Voucher",
+        "description": "Electronics voucher redeemable across Croma stores and online.",
+        "points_cost": 15000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "SHOPPING",
+        "title": "Nykaa Beauty Hamper",
+        "description": "Curated beauty and skincare hamper plus Nykaa shopping voucher.",
+        "points_cost": 8000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "WELLNESS",
+        "title": "Cult.fit Pro Membership",
+        "description": "Annual Cult.fit Pro membership covering gym and group classes.",
+        "points_cost": 12000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "WELLNESS",
+        "title": "Taj Spa Day for Two",
+        "description": "Relaxation spa day for two at a Taj Salon & Spa.",
+        "points_cost": 15000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "WELLNESS",
+        "title": "Annual Health Checkup",
+        "description": "Full-body annual health checkup at a partner diagnostics chain.",
+        "points_cost": 10000,
         "cash_component": 0,
         "verified": true
       }
@@ -139,6 +331,22 @@
         "verified": true
       },
       {
+        "category": "SHOPPING",
+        "title": "Flipkart Shopping Voucher",
+        "description": "Shopping voucher redeemable across Flipkart.",
+        "points_cost": 12000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "SHOPPING",
+        "title": "Myntra Fashion Voucher",
+        "description": "Fashion and apparel voucher redeemable on Myntra.",
+        "points_cost": 8000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
         "category": "DINING",
         "title": "Zomato Gold Membership",
         "description": "Annual Zomato Gold membership.",
@@ -147,10 +355,73 @@
         "verified": true
       },
       {
+        "category": "DINING",
+        "title": "Swiggy One Membership",
+        "description": "Annual Swiggy One membership with free delivery and dining discounts.",
+        "points_cost": 4500,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "DINING",
+        "title": "QSR Combo Voucher",
+        "description": "Combo meal voucher redeemable at KFC, Pizza Hut and partner quick-service outlets.",
+        "points_cost": 3000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
         "category": "ENTERTAINMENT",
         "title": "PVR Movie Night",
         "description": "Two premium PVR movie tickets with popcorn combo.",
         "points_cost": 2000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "ENTERTAINMENT",
+        "title": "Streaming Annual Subscription",
+        "description": "One year of a partner streaming service (Netflix, Spotify or equivalent).",
+        "points_cost": 6000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "ENTERTAINMENT",
+        "title": "BookMyShow Cashback Voucher",
+        "description": "Cashback voucher for movies and events booked on BookMyShow.",
+        "points_cost": 3500,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "TRAVEL",
+        "title": "Airport Lounge Access (4 visits/yr)",
+        "description": "Complimentary domestic airport lounge access, up to 4 visits per year.",
+        "points_cost": null,
+        "verified": true
+      },
+      {
+        "category": "TRAVEL",
+        "title": "Domestic Flight Cashback Voucher",
+        "description": "Cashback voucher redeemable against domestic flight bookings on partner portals.",
+        "points_cost": 18000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "WELLNESS",
+        "title": "Cult.fit Basic Membership",
+        "description": "Annual Cult.fit Basic membership for gym and at-home workouts.",
+        "points_cost": 8000,
+        "cash_component": 0,
+        "verified": true
+      },
+      {
+        "category": "WELLNESS",
+        "title": "HealthifyMe Premium",
+        "description": "Annual HealthifyMe Premium subscription with coaching and diet plans.",
+        "points_cost": 5000,
         "cash_component": 0,
         "verified": true
       }
