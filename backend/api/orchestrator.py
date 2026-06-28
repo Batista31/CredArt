@@ -49,79 +49,67 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
             _caveat_cache[cid] = await bank_mcp_client.get_caveat(cid)
         return _caveat_cache[cid]
 
-    # --- Expiry candidates (proactive hook) ---
     soonest = None
     if intent.kind in ("greeting", "check_expiry", "redeem"):
-        for c in cards:
-            d = c["days_to_expiry"]
-            if c["next_expiry_points"] and d is not None and d <= 30:
+        for card in cards:
+            days = card["days_to_expiry"]
+            if card["next_expiry_points"] and days is not None and days <= 30:
                 candidates.append(Candidate(
-                    kind="expiry", card_id=c["card_id"], card_name=c["card_name"],
-                    label=f"{c['next_expiry_points']:,} {c['currency_name']} expiring",
-                    expiry_urgent=d <= 7, note=f"expires {_expiry_phrase(d)}"))
-                if soonest is None or d < soonest[1]:
-                    soonest = (c, d)
+                    kind="expiry", card_id=card["card_id"], card_name=card["card_name"],
+                    label=f"{card['next_expiry_points']:,} {card['currency_name']} expiring",
+                    expiry_urgent=days <= 7, note=f"expires {_expiry_phrase(days)}"))
+                if soonest is None or days < soonest[1]:
+                    soonest = (card, days)
 
-    # --- Proactive: affordable redemptions ON the expiring card (deterministic) ---
     if intent.kind in ("greeting", "check_expiry") and soonest is not None:
         cid = soonest[0]["card_id"]
         rules = await bank_mcp_client.get_redemption_rules(cid)
         trace.append(ToolCall(tool="get_redemption_rules", args={"card_id": cid},
                               result_count=len(rules["redemption_options"])))
-        bal = points_of.get(cid, 0)
-        cav = await caveat_for(cid)
+        balance = points_of.get(cid, 0)
+        caveat = await caveat_for(cid)
         affordable = sorted(
-            (o for o in rules["redemption_options"] if o["points_cost"] is not None and bal >= o["points_cost"]),
-            key=lambda o: o["points_cost"])
-        for o in affordable[:3]:
+            (option for option in rules["redemption_options"]
+             if option["points_cost"] is not None and balance >= option["points_cost"]),
+            key=lambda option: option["points_cost"])
+        for option in affordable[:3]:
             candidates.append(Candidate(
                 kind="redemption", card_id=cid, card_name=name_of[cid],
-                label=o["benefit_name"], category=o.get("category"),
-                points_cost=o["points_cost"], affordable=True,
-                source_url=o["source_url"], note="redeemable before expiry", caveat=cav))
+                label=option["benefit_name"], category=option.get("category"),
+                points_cost=option["points_cost"], affordable=True,
+                source_url=option["source_url"], note="redeemable before expiry", caveat=caveat))
 
-    # --- Semantic redemption / perk candidates ---
     if intent.kind in ("explore_benefits", "redeem"):
         query = intent.query.strip() or (intent.category or "rewards")
         hits = await bank_mcp_client.get_benefit_chunks(query, intent.card_id, top_k=8)
         trace.append(ToolCall(tool="get_benefit_chunks",
                               args={"query": query, "card_id": intent.card_id},
                               result_count=len(hits)))
-
-        # Semantic similarity alone can surface high-value but off-intent rewards.
-        # When intent extraction found a category, prefer that category as a hard
-        # candidate boundary. Fall back to the full semantic set only when the
-        # catalogue has no result in the requested category.
         category_hits = [
-            h for h in hits
-            if (h.get("category") or "").upper() == (intent.category or "").upper()
+            hit for hit in hits
+            if (hit.get("category") or "").upper() == (intent.category or "").upper()
         ]
         relevant_hits = category_hits if intent.category and category_hits else hits
-
-        for h in relevant_hits:
-            if h["card_id"] not in held:
-                continue  # never suggest a card the user doesn't hold
-            pc = h.get("points_cost")
-            if pc is None:
+        for hit in relevant_hits:
+            if hit["card_id"] not in held:
+                continue
+            points_cost = hit.get("points_cost")
+            if points_cost is None:
                 candidates.append(Candidate(
-                    kind="perk", card_id=h["card_id"], card_name=name_of[h["card_id"]],
-                    label=h["benefit_name"], category=h.get("category"),
-                    similarity=h["similarity"], source_url=h["source_url"],
+                    kind="perk", card_id=hit["card_id"], card_name=name_of[hit["card_id"]],
+                    label=hit["benefit_name"], category=hit.get("category"),
+                    similarity=hit["similarity"], source_url=hit["source_url"],
                     note="included benefit (no points cost)"))
             else:
-                bal = points_of.get(h["card_id"], 0)
+                balance = points_of.get(hit["card_id"], 0)
                 candidates.append(Candidate(
-                    kind="redemption", card_id=h["card_id"], card_name=name_of[h["card_id"]],
-                    label=h["benefit_name"], category=h.get("category"),
-                    points_cost=pc, affordable=bal >= pc,
-                    similarity=h["similarity"], source_url=h["source_url"],
-                    note=None if bal >= pc else f"needs {pc - bal:,} more points",
-                    caveat=await caveat_for(h["card_id"])))
+                    kind="redemption", card_id=hit["card_id"], card_name=name_of[hit["card_id"]],
+                    label=hit["benefit_name"], category=hit.get("category"),
+                    points_cost=points_cost, affordable=balance >= points_cost,
+                    similarity=hit["similarity"], source_url=hit["source_url"],
+                    note=None if balance >= points_cost else f"needs {points_cost - balance:,} more points",
+                    caveat=await caveat_for(hit["card_id"])))
 
-    # --- Transfer candidates ---
-    # Transfer partners are useful for explicit transfer requests and travel
-    # discovery. Do not mix airline/hotel transfers into dining, shopping,
-    # entertainment, or wellness result sets.
     include_transfers = (
         intent.kind == "transfer"
         or (intent.kind == "explore_benefits"
@@ -133,21 +121,20 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
             partners = await bank_mcp_client.get_transfer_partners(cid)
             trace.append(ToolCall(tool="get_transfer_partners",
                                   args={"card_id": cid}, result_count=len(partners)))
-            for p in partners[:2]:
+            for partner in partners[:2]:
                 candidates.append(Candidate(
                     kind="transfer", card_id=cid, card_name=name_of.get(cid, cid),
-                    label=f"{p['partner_name']} ({p['ratio']})", category="TRAVEL",
-                    effective_value_inr=float(p["effective_value_inr"]) if p["effective_value_inr"] is not None else None,
-                    best_use_case=p["best_use_case"], source_url=p["source_url"]))
+                    label=f"{partner['partner_name']} ({partner['ratio']})", category="TRAVEL",
+                    effective_value_inr=float(partner["effective_value_inr"]) if partner["effective_value_inr"] is not None else None,
+                    best_use_case=partner["best_use_case"], source_url=partner["source_url"]))
 
-    # --- CMR: fetch the user's profile signals (Layer 1, never sent to the LLM) ---
+    # --- CMR: fetch user profile signals (Layer 1, never sent to the LLM) ---
     uid = user["user_id"]
     prefs = await user_service.get_preferences(uid) or {}
     wishlist = await cmr_service.get_wishlist_labels(uid)
     dismissed = await cmr_service.get_dismissed_labels(uid)
 
-    # Filter out dismissed benefits BEFORE scoring — a rejected item must never
-    # resurface for this user.
+    # Filter out dismissed benefits BEFORE scoring.
     if dismissed:
         before = len(candidates)
         candidates = [c for c in candidates if c.label not in dismissed]
@@ -163,14 +150,12 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
         trace.append(ToolCall(tool="score_candidates", args={"dims": 5},
                               result_count=len(candidates)))
 
-    # --- Phase 9: stable id + fulfilment options (one live path + always demo) ---
-    for c in candidates:
-        c.candidate_id = uuid4().hex[:8]
-        if c.kind in ("redemption", "perk", "transfer"):
-            c.fulfillment_options = [FulfillmentOption(**o)
-                                     for o in registry.fulfillment_options_for(c.model_dump())]
+    for candidate in candidates:
+        candidate.candidate_id = uuid4().hex[:8]
+        if candidate.kind in ("redemption", "perk", "transfer"):
+            candidate.fulfillment_options = [FulfillmentOption(**option)
+                                             for option in registry.fulfillment_options_for(candidate.model_dump())]
 
-    # --- Phase 7: LLM rerank + reply (Groq primary, template fallback) ---
     llm_reply = None
     llm_used = False
     if candidates:
@@ -178,8 +163,8 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
             from services.llm_service import llm_rerank_reply
             llm_reply, llm_used = await llm_rerank_reply(
                 candidates[:8], user.get("name", ""), intent.query)
-        except Exception as e:
-            print(f"[orchestrator] LLM rerank failed ({e}), using template")
+        except Exception as exc:
+            print(f"[orchestrator] LLM rerank failed ({exc}), using template")
 
     reply = llm_reply or _templated_reply(intent, user, candidates, soonest)
 
@@ -199,26 +184,24 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
 
 
 def _templated_reply(intent, user, candidates, soonest) -> str:
-    """Deterministic reply (Phase 7 replaces this with Claude)."""
     name = (user or {}).get("name", "there").split()[0]
-    redemptions = [c for c in candidates if c.kind == "redemption"]
-    transfers = [c for c in candidates if c.kind == "transfer"]
+    redemptions = [candidate for candidate in candidates if candidate.kind == "redemption"]
+    transfers = [candidate for candidate in candidates if candidate.kind == "transfer"]
 
     if intent.kind in ("greeting", "check_expiry") and soonest:
-        c, d = soonest
-        lead = (f"Hi {name} — heads up: {c['next_expiry_points']:,} "
-                f"{c['currency_name']} on your {c['card_name']} expire {_expiry_phrase(d)}.")
-        # Prefer an affordable redemption ON the expiring card.
-        aff = next((r for r in redemptions if r.affordable and r.card_id == c["card_id"]), None)
-        if aff:
-            lead += (f" You could redeem them for “{aff.label}” "
-                     f"({aff.points_cost:,} pts) before they lapse.")
+        card, days = soonest
+        lead = (f"Hi {name} — heads up: {card['next_expiry_points']:,} "
+                f"{card['currency_name']} on your {card['card_name']} expire {_expiry_phrase(days)}.")
+        affordable = next((candidate for candidate in redemptions if candidate.affordable and candidate.card_id == card["card_id"]), None)
+        if affordable:
+            lead += (f" You could redeem them for “{affordable.label}” "
+                     f"({affordable.points_cost:,} pts) before they lapse.")
         return lead
 
     if intent.kind == "transfer" and transfers:
-        t = transfers[0]
-        return (f"{name}, your best transfer is {t.label} at ≈₹{t.effective_value_inr}/pt"
-                + (f" — great for {t.best_use_case.lower()}." if t.best_use_case else "."))
+        top = transfers[0]
+        return (f"{name}, your best transfer is {top.label} at ≈₹{top.effective_value_inr}/pt"
+                + (f" — great for {top.best_use_case.lower()}." if top.best_use_case else "."))
 
     if redemptions:
         top = redemptions[0]

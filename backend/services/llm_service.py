@@ -30,7 +30,9 @@ Schema:
   "query": "<user message verbatim>",
   "card_id": "<hdfc_infinia|hdfc_regalia_gold|hdfc_millennia or null>",
   "category": "<TRAVEL|DINING|ENTERTAINMENT|SHOPPING|WELLNESS or null>",
-  "urgency": true/false
+  "urgency": true/false,
+  "journey_type": "<travel_flight|travel_hotel|product_purchase|home_setup|gift_purchase|voucher_redemption|cashback_or_statement_credit|transfer_partner_redemption|card_benefit_lookup|points_expiry_help|general_reward_advice or null>",
+  "slots": {}
 }
 
 Rules:
@@ -42,6 +44,8 @@ Rules:
 - urgency=true: user signals time pressure around expiry
 - category: infer from context (flights/hotels→TRAVEL, food→DINING, movie→ENTERTAINMENT, etc.)
 - card_id: only set if user names a specific card
+- journey_type: choose the closest real-world journey
+- slots: only include clearly stated structured details (for example style, destination, budget, room_type, required_products)
 """
 
 _RERANK_SYSTEM = """You are CredArt's recommendation engine. You receive a ranked candidate list (already scored by a deterministic engine) and the user's message, and you write a concise, helpful reply.
