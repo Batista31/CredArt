@@ -27,6 +27,7 @@ async def get_user_cards(user_id: str) -> list[dict]:
                c.card_name,
                c.currency_name,
                uc.current_points,
+               uc.demo_points,
                uc.next_expiry_points,
                uc.next_expiry_date,
                uc.is_primary,

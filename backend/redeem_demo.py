@@ -68,18 +68,17 @@ def main() -> None:
             "REAL points must be untouched by a demo redemption!"
         print(f"real current_points unchanged: {before[cand['card_id']]:,} -> {after[cand['card_id']]:,} ✓")
 
-        # 3. Try a LIVE provider that's unavailable (no creds) -> expect a clean 400.
-        live = next((o for o in cand["fulfillment_options"]
-                     if o["mode"] == "live" and not o["available"]), None)
+        # 3. Production without consent -> expect a clean 400 (consent gate).
+        live = next((o for o in cand["fulfillment_options"] if o["mode"] == "live"), None)
         if live:
-            print(f"\n--- LIVE redeem on unavailable provider '{live['provider_id']}' (expect 400) ---")
+            print(f"\n--- PRODUCTION redeem without consent on '{live['provider_id']}' (expect 400) ---")
             r = client.post(f"{BASE}/redeem", json={
                 "user_id": RIYA, "session_id": sid,
                 "candidate_id": cand["candidate_id"],
-                "provider_id": live["provider_id"], "mode": "live",
+                "provider_id": live["provider_id"], "mode": "production", "consent": False,
             })
             print(f"  HTTP {r.status_code}: {r.json().get('detail')}")
-            assert r.status_code == 400, "unavailable live provider should 400"
+            assert r.status_code == 400, "production without consent should 400"
 
         print("\n✅ Phase 9 one-click redemption OK")
 

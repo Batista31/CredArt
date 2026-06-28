@@ -23,8 +23,10 @@ _HEADERS_VERSION = "v2"
 class DuffelProvider(RedemptionProvider):
     provider_id = "duffel_flight"
     label = "Book flight (Duffel · live test)"
+    path = "api"
     mode = "live"
     currency = "points"
+    requires_otp = False  # real test API issues a PNR directly, no OTP step
 
     def __init__(self) -> None:
         self.token = os.getenv("DUFFEL_API_KEY", "")

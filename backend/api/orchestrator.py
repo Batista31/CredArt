@@ -87,7 +87,18 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
         trace.append(ToolCall(tool="get_benefit_chunks",
                               args={"query": query, "card_id": intent.card_id},
                               result_count=len(hits)))
-        for h in hits:
+
+        # Semantic similarity alone can surface high-value but off-intent rewards.
+        # When intent extraction found a category, prefer that category as a hard
+        # candidate boundary. Fall back to the full semantic set only when the
+        # catalogue has no result in the requested category.
+        category_hits = [
+            h for h in hits
+            if (h.get("category") or "").upper() == (intent.category or "").upper()
+        ]
+        relevant_hits = category_hits if intent.category and category_hits else hits
+
+        for h in relevant_hits:
             if h["card_id"] not in held:
                 continue  # never suggest a card the user doesn't hold
             pc = h.get("points_cost")
@@ -108,7 +119,15 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
                     caveat=await caveat_for(h["card_id"])))
 
     # --- Transfer candidates ---
-    if intent.kind in ("transfer", "explore_benefits"):
+    # Transfer partners are useful for explicit transfer requests and travel
+    # discovery. Do not mix airline/hotel transfers into dining, shopping,
+    # entertainment, or wellness result sets.
+    include_transfers = (
+        intent.kind == "transfer"
+        or (intent.kind == "explore_benefits"
+            and (intent.category is None or intent.category == "TRAVEL"))
+    )
+    if include_transfers:
         target = [intent.card_id] if intent.card_id else list(held)
         for cid in target:
             partners = await bank_mcp_client.get_transfer_partners(cid)
@@ -127,10 +146,10 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
         trace.append(ToolCall(tool="score_candidates", args={"dims": 5},
                               result_count=len(candidates)))
 
-    # --- Phase 9: stable id + fulfilment options (live providers + always demo) ---
+    # --- Phase 9: stable id + fulfilment options (one live path + always demo) ---
     for c in candidates:
         c.candidate_id = uuid4().hex[:8]
-        if c.kind in ("redemption", "perk"):
+        if c.kind in ("redemption", "perk", "transfer"):
             c.fulfillment_options = [FulfillmentOption(**o)
                                      for o in registry.fulfillment_options_for(c.model_dump())]
 

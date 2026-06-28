@@ -20,12 +20,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from services import bank_mcp_client, db, embeddings_service, scoring_service, user_service
 from services.sms_service import ingest_sms
 
-from services.redemption import registry
-from services.redemption.executor import execute_redemption
+from services.redemption import booking_session_service, registry
+from services.redemption.executor import start_redemption, submit_otp
 
 from .intent import extract_intent
 from .orchestrator import orchestrate
-from .schemas import ChatRequest, ChatResponse, RedeemRequest, RedeemResponse, SmsRequest
+from .schemas import (
+    BookingSessionResponse,
+    ChatRequest,
+    ChatResponse,
+    OtpRequest,
+    RedeemRequest,
+    RedeemResponse,
+    SmsRequest,
+)
 from .session import SessionStore
 
 store = SessionStore()
@@ -88,8 +96,15 @@ async def chat(req: ChatRequest):
         claude_used=meta.get("llm_used", False),
     )
     await store.append_turn(session, "assistant", resp.reply)
-    # Stash this turn's candidate set so /redeem can resolve a one-click choice.
-    session["last_candidates"] = [c.model_dump() for c in candidates]
+    # Stash candidates so /redeem can resolve a one-click choice. Accumulate across
+    # turns (ids are unique per turn) so an earlier turn's card stays redeemable.
+    dumps = [c.model_dump() for c in candidates]
+    session["last_candidates"] = dumps
+    idx = session.get("candidate_index") or {}
+    for c in dumps:
+        if c.get("candidate_id"):
+            idx[c["candidate_id"]] = c
+    session["candidate_index"] = idx
     await store.save(session)
     return resp
 
@@ -101,24 +116,44 @@ async def redeem(req: RedeemRequest):
         raise HTTPException(status_code=404, detail="unknown user_id")
 
     session = await store.load(req.session_id)
-    candidates = session.get("last_candidates") or []
-    candidate = next((c for c in candidates if c.get("candidate_id") == req.candidate_id), None)
+    idx = session.get("candidate_index") or {}
+    candidate = idx.get(req.candidate_id)
+    if candidate is None:
+        candidates = session.get("last_candidates") or []
+        candidate = next((c for c in candidates if c.get("candidate_id") == req.candidate_id), None)
     if candidate is None:
         raise HTTPException(status_code=404, detail="unknown candidate_id for this session")
 
-    provider = registry.get_provider(req.provider_id)
-    if provider is None:
-        raise HTTPException(status_code=400, detail="unknown provider_id")
-    if provider.mode != req.mode:
-        raise HTTPException(status_code=400,
-                            detail=f"provider '{req.provider_id}' is {provider.mode}, not {req.mode}")
-    if not provider.is_available():
-        raise HTTPException(status_code=400,
-                            detail=provider.unavailable_note() or "provider unavailable")
+    # Mode gates which provider runs. Demo → always the demo provider (demo_points).
+    # Production → the chosen live path; requires explicit consent.
+    if req.mode == "demo":
+        provider = registry.get_provider("demo")
+    else:
+        if not req.consent:
+            raise HTTPException(status_code=400, detail="consent required for a production booking")
+        provider = registry.get_provider(req.provider_id)
+        if provider is None or provider.path == "demo":
+            raise HTTPException(status_code=400, detail="choose a live provider (api/assisted/bank) for production")
+        if not provider.is_available():
+            raise HTTPException(status_code=400, detail=provider.unavailable_note() or "provider unavailable")
 
     traveler = (req.traveler.model_dump() if req.traveler else {})
-    result = await execute_redemption(req.user_id, candidate, provider, traveler)
+    result = await start_redemption(req.user_id, candidate, provider, traveler, req.mode)
     return RedeemResponse(**result)
+
+
+@app.post("/booking-sessions/{session_id}/otp")
+async def booking_otp(session_id: str, body: OtpRequest):
+    """Submit an OTP for a production booking session. OTP is never stored."""
+    return await submit_otp(session_id, body.otp)
+
+
+@app.get("/booking-sessions/{session_id}", response_model=BookingSessionResponse)
+async def booking_get(session_id: str):
+    sess = booking_session_service.get(session_id)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="unknown booking session")
+    return BookingSessionResponse(**sess)
 
 
 @app.post("/sms")

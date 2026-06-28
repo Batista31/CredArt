@@ -19,12 +19,16 @@ class Intent(BaseModel):
     urgency: bool = False
 
 
+FulfillmentPath = Literal["demo", "api", "assisted", "bank"]
+
+
 class FulfillmentOption(BaseModel):
-    """A way to actually fulfil a candidate. `live` options book for real
-    (and spend real points); the `demo` option is always present, mimics the
+    """A way to actually fulfil a candidate. `live` options (api/assisted/bank) book
+    for real and spend real points; the `demo` option is always present, mimics the
     booking, and spends demo_points so the demo is replayable."""
     provider_id: str
     label: str
+    path: FulfillmentPath = "demo"
     mode: Literal["live", "demo"]
     currency: Literal["points", "demo_points"]
     available: bool = True
@@ -101,27 +105,46 @@ class RedeemRequest(BaseModel):
     session_id: str
     candidate_id: str
     provider_id: str
-    mode: Literal["live", "demo"] = "demo"
+    mode: Literal["demo", "production"] = "demo"
+    consent: bool = False  # required for any production (real) booking
     traveler: Optional[Traveler] = None
 
 
 class RedeemStep(BaseModel):
     label: str
-    status: Literal["done", "failed"] = "done"
+    status: Literal["done", "failed", "pending"] = "done"
     detail: Optional[str] = None
 
 
 class RedeemResponse(BaseModel):
-    status: Literal["completed", "failed"]
+    status: Literal["completed", "failed", "otp_required"]
     transaction_id: str
     confirmation_reference: Optional[str] = None
     provider_id: str
-    mode: Literal["live", "demo"]
+    path: Optional[str] = None
+    mode: Literal["demo", "production"]
     option_label: str
     card_id: str
     card_name: str
     currency: Literal["points", "demo_points"]
-    points_used: int
-    balance_after: int
+    points_used: int = 0
+    balance_after: int = 0
+    booking_session_id: Optional[str] = None
     steps: list[RedeemStep] = Field(default_factory=list)
     rollback_reason: Optional[str] = None
+
+
+class OtpRequest(BaseModel):
+    otp: str
+
+
+class BookingSessionResponse(BaseModel):
+    id: str
+    status: str
+    merchant: str
+    amount: int
+    card_last4: str
+    otp_required: bool
+    otp_deadline: float
+    confirmation_reference: Optional[str] = None
+    error_message: Optional[str] = None
