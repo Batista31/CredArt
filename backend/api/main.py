@@ -17,7 +17,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from services import bank_mcp_client, db, embeddings_service, scoring_service, user_service
+from services import (
+    bank_mcp_client,
+    cmr_service,
+    db,
+    embeddings_service,
+    scoring_service,
+    user_service,
+)
 from services.sms_service import ingest_sms
 
 from services.redemption import booking_session_service, registry
@@ -26,13 +33,17 @@ from services.redemption.executor import start_redemption, submit_otp
 from .intent import extract_intent
 from .orchestrator import orchestrate
 from .schemas import (
+    Address,
+    AddressRequest,
     BookingSessionResponse,
     ChatRequest,
     ChatResponse,
+    DismissRequest,
     OtpRequest,
     RedeemRequest,
     RedeemResponse,
     SmsRequest,
+    WishlistRequest,
 )
 from .session import SessionStore
 
@@ -138,8 +149,35 @@ async def redeem(req: RedeemRequest):
             raise HTTPException(status_code=400, detail=provider.unavailable_note() or "provider unavailable")
 
     traveler = (req.traveler.model_dump() if req.traveler else {})
+
+    # CMR — physical goods need a delivery address. Prefer an address supplied
+    # inline (saved for next time), else the user's saved default. If neither
+    # exists, ask for one conversationally instead of booking.
+    delivery = None
+    if cmr_service.is_physical_goods(candidate):
+        if req.delivery_address is not None:
+            delivery = await cmr_service.save_address(
+                req.user_id, req.delivery_address.model_dump(), make_default=True)
+        else:
+            delivery = await cmr_service.get_default_address(req.user_id)
+        if delivery is None:
+            return RedeemResponse(
+                status="address_required", transaction_id="",
+                provider_id=provider.provider_id, path=provider.path, mode=req.mode,
+                option_label=candidate.get("label", ""), card_id=candidate["card_id"],
+                card_name=candidate.get("card_name", ""), currency=provider.currency,
+                address_prompt=(
+                    "This is a physical item, so I'll need a delivery address. "
+                    "Share a label (Home/Office), street, city, state and pincode "
+                    "and I'll save it to your profile for next time."),
+            )
+        traveler = {**traveler, "delivery_address": delivery}
+
     result = await start_redemption(req.user_id, candidate, provider, traveler, req.mode)
-    return RedeemResponse(**result)
+    resp = RedeemResponse(**result)
+    if delivery is not None:
+        resp.delivery_address = Address(**delivery)
+    return resp
 
 
 @app.post("/booking-sessions/{session_id}/otp")
@@ -170,3 +208,76 @@ async def cards(user_id: str):
     if user is None:
         raise HTTPException(status_code=404, detail="unknown user_id")
     return {"user": user, "cards": await user_service.get_user_cards(user_id)}
+
+
+# ---------------------------------------------------------------------------
+# CMR (Customer Master Record) — unified user profile: extended preferences,
+# saved addresses, wishlist, dismissed. All Layer 1 / deterministic; this data
+# feeds scoring + delivery, never the LLM.
+# ---------------------------------------------------------------------------
+
+async def _resolve_candidate(session_id: str | None, candidate_id: str | None) -> dict | None:
+    """Look up a stashed candidate from a chat session, or None."""
+    if not (session_id and candidate_id):
+        return None
+    session = await store.load(session_id)
+    idx = session.get("candidate_index") or {}
+    cand = idx.get(candidate_id)
+    if cand is None:
+        cand = next((c for c in (session.get("last_candidates") or [])
+                     if c.get("candidate_id") == candidate_id), None)
+    return cand
+
+
+@app.get("/cmr/{user_id}")
+async def cmr_profile(user_id: str):
+    """The full unified profile: user + preferences + addresses + wishlist + dismissed."""
+    user = await user_service.get_user(user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="unknown user_id")
+    return await cmr_service.get_profile(user_id)
+
+
+@app.post("/cmr/address")
+async def cmr_save_address(req: AddressRequest):
+    user = await user_service.get_user(req.user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="unknown user_id")
+    addr = req.model_dump(exclude={"user_id", "make_default", "is_default"})
+    saved = await cmr_service.save_address(req.user_id, addr, make_default=req.make_default)
+    return {"status": "saved", "address": saved}
+
+
+@app.post("/cmr/wishlist")
+async def cmr_wishlist(req: WishlistRequest):
+    user = await user_service.get_user(req.user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="unknown user_id")
+    label, card_id, category = req.label, req.card_id, req.category
+    cand = await _resolve_candidate(req.session_id, req.candidate_id)
+    if cand is not None:
+        label = label or cand.get("label")
+        card_id = card_id or cand.get("card_id")
+        category = category or cand.get("category")
+    if not label:
+        raise HTTPException(status_code=400,
+                            detail="provide a label or a resolvable session candidate")
+    await cmr_service.add_to_wishlist(req.user_id, label, card_id, category)
+    return {"status": "wishlisted", "label": label}
+
+
+@app.post("/cmr/dismiss")
+async def cmr_dismiss(req: DismissRequest):
+    user = await user_service.get_user(req.user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="unknown user_id")
+    label, card_id = req.label, req.card_id
+    cand = await _resolve_candidate(req.session_id, req.candidate_id)
+    if cand is not None:
+        label = label or cand.get("label")
+        card_id = card_id or cand.get("card_id")
+    if not label:
+        raise HTTPException(status_code=400,
+                            detail="provide a label or a resolvable session candidate")
+    await cmr_service.add_dismissed(req.user_id, label, card_id)
+    return {"status": "dismissed", "label": label}
