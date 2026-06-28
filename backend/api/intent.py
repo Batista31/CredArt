@@ -27,6 +27,21 @@ _TRANSFER = ["transfer", "convert", "miles", "airline", "krisflyer", "vistara",
 _REDEEM = ["redeem", "book", "use my points", "use my pts", "cash in", "spend my points", "get me"]
 _GREETING = ["hi", "hello", "hey", "good morning", "good evening", "namaste", "yo"]
 
+CITY_TO_IATA = {
+    "bangalore": "BLR", "bengaluru": "BLR", "mumbai": "BOM", "bombay": "BOM",
+    "delhi": "DEL", "new delhi": "DEL", "goa": "GOI", "chennai": "MAA",
+    "hyderabad": "HYD", "kolkata": "CCU", "pune": "PNQ", "ahmedabad": "AMD",
+    "kochi": "COK", "cochin": "COK", "jaipur": "JAI",
+    "dubai": "DXB", "abu dhabi": "AUH", "london": "LHR", "singapore": "SIN",
+}
+
+
+def _city_to_iata(v: str) -> str | None:
+    return CITY_TO_IATA.get(v.lower())
+
+
+_ALWAYS_COMPLETE = {"greeting", "check_expiry", "unknown"}
+
 _SLOT_PATTERNS = {
     "style": ["cozy", "modern", "luxury", "minimal", "functional"],
     "room_type": ["living room", "bedroom", "kitchen", "office"],
@@ -52,7 +67,11 @@ def _match(text: str, words: list[str]) -> bool:
     return any(w in text for w in words)
 
 
-async def extract_intent(message: str) -> Intent:
+async def extract_intent(
+    message: str,
+    partial_intent: dict | None = None,
+    conversation_history: list[dict] | None = None,
+) -> Intent:
     text = (message or "").lower().strip()
 
     # --- LLM path (Groq primary) ---
@@ -60,7 +79,7 @@ async def extract_intent(message: str) -> Intent:
     parsed = await llm_extract_intent(message)
     if parsed:
         try:
-            return Intent(
+            current = dict(
                 kind=parsed.get("kind", "unknown"),
                 query=parsed.get("query", message or ""),
                 card_id=parsed.get("card_id"),
@@ -68,7 +87,23 @@ async def extract_intent(message: str) -> Intent:
                 urgency=bool(parsed.get("urgency", False)),
                 journey_type=parsed.get("journey_type"),
                 slots=parsed.get("slots", {}),
+                origin=parsed.get("origin"),
+                destination=parsed.get("destination"),
+                depart_date=parsed.get("depart_date"),
             )
+            from .session import merge_partial_intent
+            merged = merge_partial_intent(partial_intent, current) if partial_intent else current
+            is_complete = True
+            follow_up_question = None
+            if merged.get("kind") not in _ALWAYS_COMPLETE:
+                try:
+                    from services.llm_service import llm_check_completeness
+                    is_complete, follow_up_question = await llm_check_completeness(
+                        merged, conversation_history or []
+                    )
+                except Exception as e:
+                    print(f"[intent] completeness check failed ({e}), treating as complete")
+            return Intent(**merged, is_complete=is_complete, follow_up_question=follow_up_question)
         except Exception:
             pass  # fall through to heuristic
 
@@ -129,6 +164,23 @@ async def extract_intent(message: str) -> Intent:
     if "to " in text and journey_type.startswith("travel"):
         slots["destination"] = text.split("to ", 1)[1].split()[0].strip(",.")
 
+    # --- Flight IATA extraction (heuristic) ---
+    flying = journey_type == "travel_flight"
+    origin_iata = next(
+        (iata for city, iata in CITY_TO_IATA.items() if city in text), None
+    ) if flying else None
+    dest_iata = None
+    if flying:
+        matched = [iata for city, iata in CITY_TO_IATA.items() if city in text]
+        if len(matched) >= 2:
+            origin_iata, dest_iata = matched[0], matched[1]
+        elif len(matched) == 1:
+            dest_iata = matched[0]
+            origin_iata = None
+
+    date_match = re.search(r"\b(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b", text)
+    depart_date = date_match.group(1) if date_match else None
+
     return Intent(
         kind=kind,
         query=message or "",
@@ -137,4 +189,8 @@ async def extract_intent(message: str) -> Intent:
         urgency=urgency,
         journey_type=journey_type,
         slots=slots,
+        origin=origin_iata,
+        destination=dest_iata,
+        depart_date=depart_date,
+        is_complete=True,
     )

@@ -40,6 +40,13 @@ class Intent(BaseModel):
     urgency: bool = False
     journey_type: Optional[JourneyType] = None
     slots: dict[str, Any] = Field(default_factory=dict)
+    # Flight intent (duffel) — IATA codes + ISO date
+    origin: Optional[str] = None
+    destination: Optional[str] = None
+    depart_date: Optional[str] = None
+    # Multi-turn completeness — transient, not stored across turns
+    is_complete: bool = True
+    follow_up_question: Optional[str] = None
 
 
 class FulfillmentOption(BaseModel):
@@ -81,6 +88,10 @@ class Candidate(BaseModel):
     item_id: Optional[str] = None
     cash_price_inr: Optional[int] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # Flight route — carried to DuffelProvider at /redeem
+    origin: Optional[str] = None
+    destination: Optional[str] = None
+    depart_date: Optional[str] = None
 
 
 class ToolCall(BaseModel):

@@ -124,6 +124,34 @@ def _home_item_to_candidate(item: dict) -> dict:
     }
 
 
+_NEVER_FOLLOWUP_JOURNEYS = {
+    "general_reward_advice", "card_benefit_lookup", "points_expiry_help",
+    "cashback_or_statement_credit",
+}
+
+
+async def _llm_postcandidate_check(
+    intent: Any,
+    history: list[dict],
+    candidates: list[dict],
+) -> tuple[bool, str | None]:
+    """Second LLM round: given the fetched candidates, ask one more question if needed.
+
+    Returns (is_complete, follow_up_question). Defaults to (True, None) on any error so
+    the loop never blocks on LLM failure — we fall through to showing recommendations.
+    """
+    jt = getattr(intent, "journey_type", None) or ""
+    if jt in _NEVER_FOLLOWUP_JOURNEYS or not candidates:
+        return True, None
+    try:
+        from services.llm_service import llm_check_completeness
+        intent_dict = intent.model_dump() if hasattr(intent, "model_dump") else dict(intent)
+        return await llm_check_completeness(intent_dict, history, candidates=candidates)
+    except Exception as exc:
+        print(f"[dialogue] post-candidate LLM check failed ({exc}), showing recommendations")
+        return True, None
+
+
 async def generate_concierge_response(user_id: str, message: str, conversation_id: str | None = None) -> dict:
     user = await user_service.get_user(user_id)
     if user is None:
@@ -140,10 +168,23 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
     existing_state = await conversation_service.get_state(conversation_id) or {}
     await conversation_service.add_message(conversation_id, "user", message)
 
-    intent = await extract_intent(message)
+    # Load conversation history for multi-turn context passing.
+    conv_history = await conversation_service.get_messages(conversation_id)
+    conv_history_dicts = [{"role": m["role"], "content": m["content"]} for m in (conv_history or [])]
+
+    rec_state = existing_state.get("recommendation_state") or {}
+    partial_intent_dict = rec_state.get("partial_intent") if isinstance(rec_state, dict) else None
+    intent = await extract_intent(message, partial_intent=partial_intent_dict, conversation_history=conv_history_dicts)
     journey_type = intent.journey_type or existing_state.get("journey_type") or "general_reward_advice"
     known_slots = _merge_slots(existing_state.get("known_slots") or {}, intent.slots)
     known_slots = _merge_slots(memory.get("structured_preferences") or {}, known_slots)
+    # Carry flight fields into known_slots for continuity across turns.
+    if intent.origin:
+        known_slots["origin"] = intent.origin
+    if intent.destination:
+        known_slots["destination"] = intent.destination
+    if intent.depart_date:
+        known_slots["departure_window"] = intent.depart_date
     missing_slots = _missing_slots(journey_type, known_slots)
 
     cards = await user_service.get_user_cards(user_id)
@@ -156,6 +197,7 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
     requires_confirmation = False
     memory_updates: list[str] = []
 
+    # --- Layer 1 deterministic slot check ---
     if missing_slots:
         response_type = "follow_up_question"
         assistant_message = _follow_up_message(journey_type, missing_slots)
@@ -182,22 +224,40 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
             top_k=5,
         )
         recommendations = [_home_item_to_candidate(item) for item in items]
-        response_type = "recommendation"
-        assistant_message = (
-            "I’ve got a shortlist that matches what you told me. "
-            "I focused on items that fit your style and points budget rather than just the cheapest options."
-        )
-        next_actions = ["review_recommendations", "ask_for_quote", "confirm_redemption"]
-        requires_confirmation = True
+        # --- Layer 2: post-candidate LLM follow-up loop ---
+        is_complete, llm_followup = await _llm_postcandidate_check(
+            intent, conv_history_dicts, recommendations)
+        if not is_complete and llm_followup:
+            response_type = "follow_up_question"
+            assistant_message = llm_followup
+            next_actions = ["answer_question"]
+        else:
+            response_type = "recommendation"
+            assistant_message = (
+                "I’ve got a shortlist that matches what you told me. "
+                "I focused on items that fit your style and points budget rather than just the cheapest options."
+            )
+            next_actions = ["review_recommendations", "ask_for_quote", "confirm_redemption"]
+            requires_confirmation = True
     else:
         legacy_candidates, trace, meta = await orchestrate(intent, user, cards)
         candidates = legacy_candidates
         tool_trace = [t.model_dump() for t in trace]
         recommendations = [c.model_dump() for c in legacy_candidates]
-        response_type = "recommendation" if legacy_candidates else "general_answer"
-        assistant_message = meta["reply"]
-        next_actions = ["compare_options", "check_transfer_partner", "redeem_best_option"] if legacy_candidates else ["clarify_goal"]
+        # --- Layer 2: post-candidate LLM follow-up loop ---
+        is_complete, llm_followup = await _llm_postcandidate_check(
+            intent, conv_history_dicts, recommendations)
+        if not is_complete and llm_followup:
+            response_type = "follow_up_question"
+            assistant_message = llm_followup
+            next_actions = ["answer_question"]
+        else:
+            response_type = "recommendation" if legacy_candidates else "general_answer"
+            assistant_message = meta["reply"]
+            next_actions = ["compare_options", "check_transfer_partner", "redeem_best_option"] if legacy_candidates else ["clarify_goal"]
 
+    # Persist partial intent inside recommendation_state so next turn can merge it.
+    intent_snapshot = intent.model_dump(exclude={"is_complete", "follow_up_question"})
     await conversation_service.upsert_state(
         conversation_id,
         journey_type=journey_type,
@@ -205,7 +265,10 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
         known_slots=known_slots,
         missing_slots=missing_slots,
         open_task=None if not missing_slots else conversation["title"],
-        recommendation_state={"recommendations": recommendations[:3]},
+        recommendation_state={
+            "recommendations": recommendations[:3],
+            "partial_intent": intent_snapshot,
+        },
     )
     if response_type in ("recommendation", "execution_result"):
         await conversation_service.complete_open_tasks(user_id, conversation_id)

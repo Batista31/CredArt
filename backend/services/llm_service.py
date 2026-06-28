@@ -143,3 +143,52 @@ async def llm_rerank_reply(
     """Returns (reply_text, groq_used). Falls back to None — caller uses template reply."""
     payload = _candidates_to_json(candidates, user_name, user_message)
     return await _llm_call(_RERANK_SYSTEM, payload)
+
+
+_COMPLETENESS_SYSTEM = """You are a slot-completeness checker for CredArt.
+
+Given a partial intent dict, the conversation history, and (optionally) a list of
+candidate results already fetched, decide if you have enough information to give a
+useful, personalised recommendation. Return ONLY valid JSON — no markdown.
+
+Schema:
+{
+  "is_complete": true/false,
+  "follow_up_question": "<one focused question to ask the user, or null if complete>"
+}
+
+Rules:
+- travel_flight needs: origin (IATA or city), destination (IATA or city), depart_date
+- travel_hotel needs: destination, check_in date, number of nights
+- home_setup needs: room_type or required_products
+- product_purchase / gift_purchase needs: what item, budget or points range
+- general_reward_advice / card_benefit_lookup: always complete — no follow-up
+- points_expiry_help: always complete
+- Only ask ONE question per turn. Pick the single most valuable missing slot.
+- If slots dict already has the info, mark complete even if intent.kind is vague.
+- When candidates are provided: review them. If they all share an ambiguity you
+  could resolve (e.g. economy vs business, specific city vs region), ask. If they
+  are a good match, mark complete.
+- Never ask a question whose answer is already in history or slots.
+"""
+
+
+async def llm_check_completeness(
+    intent: dict,
+    history: list[dict],
+    candidates: list[dict] | None = None,
+) -> tuple[bool, str | None]:
+    """Returns (is_complete, follow_up_question). Never raises — caller catches."""
+    payload_obj: dict = {"intent": intent, "history": history[-6:]}
+    if candidates:
+        # Send only lightweight candidate summaries — keep prompt small.
+        payload_obj["candidates"] = [
+            {"label": c.get("label", ""), "category": c.get("category", ""),
+             "points_cost": c.get("points_cost"), "kind": c.get("kind", "")}
+            for c in candidates[:6]
+        ]
+    payload = json.dumps(payload_obj, default=str)
+    raw, _ = await _llm_call(_COMPLETENESS_SYSTEM, payload)
+    raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    parsed = json.loads(raw)
+    return bool(parsed.get("is_complete", True)), parsed.get("follow_up_question")
