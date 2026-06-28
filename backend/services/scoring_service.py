@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from decimal import Decimal
 
-from . import db, transfer_partners_service, user_service
+from . import cmr_service, db, transfer_partners_service, user_service
 
 log = logging.getLogger(__name__)
 
@@ -128,12 +128,24 @@ def _expiry_risk(days: int | None) -> float:
     return 15.0
 
 
-async def score_candidates(user_id: str, candidates: list, cards: list[dict]) -> list:
-    """Attach 5-dim scores + total, sort desc, set rank. Mutates+returns list."""
+async def score_candidates(user_id: str, candidates: list, cards: list[dict],
+                           *, prefs: dict | None = None,
+                           wishlist_labels: set | None = None) -> list:
+    """Attach 5-dim scores + total, sort desc, set rank. Mutates+returns list.
+
+    `prefs` / `wishlist_labels` may be injected by the orchestrator (which has
+    already fetched the CMR profile) to avoid a redundant DB round-trip; when
+    omitted they default to a fresh fetch / no boost. The CMR boost (preferred
+    airline/hotel/cuisine match + wishlist) is added to score_total AFTER the
+    weighted 5-dim sum, so the deterministic core score stays the primary signal.
+    """
     if not candidates:
         return candidates
 
-    prefs = await user_service.get_preferences(user_id) or {}
+    if prefs is None:
+        prefs = await user_service.get_preferences(user_id) or {}
+    if wishlist_labels is None:
+        wishlist_labels = set()
     rates = await _confirm_rates(user_id)
     days_of = {c["card_id"]: c["days_to_expiry"] for c in cards}
     card_val = await _best_card_values({c.card_id for c in candidates})
@@ -147,14 +159,15 @@ async def score_candidates(user_id: str, candidates: list, cards: list[dict]) ->
         c.score_redemption_prob = round(_redemption_prob(c, rates, prefs), 1)
         c.score_expiry_risk = round(_expiry_risk(days_of.get(c.card_id)), 1)
         c.score_flexibility = round(FLEXIBILITY.get(c.kind, 50.0), 1)
-        c.score_total = round(
+        base = (
             WEIGHTS["financial"] * c.score_financial
             + WEIGHTS["lifestyle"] * c.score_lifestyle
             + WEIGHTS["redemption_prob"] * c.score_redemption_prob
             + WEIGHTS["expiry_risk"] * c.score_expiry_risk
-            + WEIGHTS["flexibility"] * c.score_flexibility,
-            1,
+            + WEIGHTS["flexibility"] * c.score_flexibility
         )
+        boost = cmr_service.preference_boost(c, prefs, wishlist_labels)
+        c.score_total = round(min(100.0, base + boost), 1)
 
     candidates.sort(key=lambda c: c.score_total, reverse=True)
     for rank, c in enumerate(candidates, 1):
