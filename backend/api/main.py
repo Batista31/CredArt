@@ -17,19 +17,32 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from services import bank_mcp_client, db, embeddings_service, scoring_service, user_service
+from services import (
+    bank_mcp_client,
+    conversation_service,
+    db,
+    embeddings_service,
+    recommendation_session_service,
+    scoring_service,
+    user_service,
+)
 from services.sms_service import ingest_sms
 
 from services.redemption import booking_session_service, registry
 from services.redemption.executor import start_redemption, submit_otp
 
+from .conversation import resume_conversation
+from .dialogue_manager import generate_concierge_response
 from .intent import extract_intent
 from .orchestrator import orchestrate
 from .schemas import (
     BookingSessionResponse,
     ChatRequest,
     ChatResponse,
+    ConversationCreateRequest,
+    ConversationMessageRequest,
     OtpRequest,
+    RecommendationSessionRequest,
     RedeemRequest,
     RedeemResponse,
     SmsRequest,
@@ -41,8 +54,8 @@ store = SessionStore()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await db.get_pool()  # warm the pool
-    await bank_mcp_client.startup()  # connect to the mock bank MCP (falls back if down)
+    await db.get_pool()
+    await bank_mcp_client.startup()
     yield
     await bank_mcp_client.shutdown()
     await db.close_pool()
@@ -51,7 +64,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="CredArt API", version="0.5.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten for deployment
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -74,14 +87,17 @@ async def chat(req: ChatRequest):
     if user is None:
         raise HTTPException(status_code=404, detail="unknown user_id")
 
+    concierge = await generate_concierge_response(
+        req.user_id, req.message, conversation_id=req.conversation_id)
+
     session = await store.load(req.session_id)
     await store.append_turn(session, "user", req.message)
 
-    intent = await extract_intent(req.message)
-    cards = await user_service.get_user_cards(req.user_id)
-    candidates, trace, meta = await orchestrate(intent, user, cards)
+    intent = concierge["intent"]
+    candidates = concierge["candidates"]
+    trace = concierge["tool_trace"]
+    meta = {"reply": concierge["message"], "llm_used": concierge["claude_used"]}
 
-    # Log the top scored candidates as the preference-learning signal.
     if candidates:
         await scoring_service.log_recommendation_events(
             req.user_id, session["session_id"], candidates)
@@ -94,16 +110,24 @@ async def chat(req: ChatRequest):
         reply=meta["reply"],
         tool_trace=trace,
         claude_used=meta.get("llm_used", False),
+        conversation_id=concierge["conversation_id"],
+        message=concierge["message"],
+        response_type=concierge["response_type"],
+        journey_type=concierge["journey_type"],
+        known_slots=concierge["known_slots"],
+        missing_slots=concierge["missing_slots"],
+        recommendations=concierge["recommendations"],
+        requires_confirmation=concierge["requires_confirmation"],
+        memory_updates=concierge["memory_updates"],
+        next_actions=concierge["next_actions"],
     )
     await store.append_turn(session, "assistant", resp.reply)
-    # Stash candidates so /redeem can resolve a one-click choice. Accumulate across
-    # turns (ids are unique per turn) so an earlier turn's card stays redeemable.
     dumps = [c.model_dump() for c in candidates]
     session["last_candidates"] = dumps
     idx = session.get("candidate_index") or {}
-    for c in dumps:
-        if c.get("candidate_id"):
-            idx[c["candidate_id"]] = c
+    for candidate in dumps:
+        if candidate.get("candidate_id"):
+            idx[candidate["candidate_id"]] = candidate
     session["candidate_index"] = idx
     await store.save(session)
     return resp
@@ -124,8 +148,6 @@ async def redeem(req: RedeemRequest):
     if candidate is None:
         raise HTTPException(status_code=404, detail="unknown candidate_id for this session")
 
-    # Mode gates which provider runs. Demo → always the demo provider (demo_points).
-    # Production → the chosen live path; requires explicit consent.
     if req.mode == "demo":
         provider = registry.get_provider("demo")
     else:
@@ -135,7 +157,8 @@ async def redeem(req: RedeemRequest):
         if provider is None or provider.path == "demo":
             raise HTTPException(status_code=400, detail="choose a live provider (api/assisted/bank) for production")
         if not provider.is_available():
-            raise HTTPException(status_code=400, detail=provider.unavailable_note() or "provider unavailable")
+            raise HTTPException(status_code=400,
+                                detail=provider.unavailable_note() or "provider unavailable")
 
     traveler = (req.traveler.model_dump() if req.traveler else {})
     result = await start_redemption(req.user_id, candidate, provider, traveler, req.mode)
@@ -144,7 +167,6 @@ async def redeem(req: RedeemRequest):
 
 @app.post("/booking-sessions/{session_id}/otp")
 async def booking_otp(session_id: str, body: OtpRequest):
-    """Submit an OTP for a production booking session. OTP is never stored."""
     return await submit_otp(session_id, body.otp)
 
 
@@ -170,3 +192,69 @@ async def cards(user_id: str):
     if user is None:
         raise HTTPException(status_code=404, detail="unknown user_id")
     return {"user": user, "cards": await user_service.get_user_cards(user_id)}
+
+
+@app.post("/conversations")
+async def create_conversation(req: ConversationCreateRequest):
+    user = await user_service.get_user(req.user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="unknown user_id")
+    convo = await conversation_service.create_conversation(req.user_id, req.message)
+    if req.message:
+        await conversation_service.add_message(convo["id"], "user", req.message)
+    return convo
+
+
+@app.get("/conversations")
+async def list_conversations(user_id: str):
+    user = await user_service.get_user(user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="unknown user_id")
+    return {"conversations": await conversation_service.list_conversations(user_id)}
+
+
+@app.get("/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str, user_id: str):
+    convo = await conversation_service.get_conversation(user_id, conversation_id)
+    if convo is None:
+        raise HTTPException(status_code=404, detail="unknown conversation_id")
+    return {
+        "conversation": convo,
+        "messages": await conversation_service.get_messages(conversation_id),
+        "state": await conversation_service.get_state(conversation_id),
+    }
+
+
+@app.post("/conversations/{conversation_id}/messages", response_model=ChatResponse)
+async def add_conversation_message(conversation_id: str, req: ConversationMessageRequest):
+    return await chat(ChatRequest(user_id=req.user_id, message=req.message, conversation_id=conversation_id))
+
+
+@app.post("/conversations/{conversation_id}/resume")
+async def resume(conversation_id: str, user_id: str):
+    data = await resume_conversation(user_id, conversation_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="unknown conversation_id")
+    return data
+
+
+@app.post("/recommendations/session")
+async def create_recommendation_session(req: RecommendationSessionRequest):
+    user = await user_service.get_user(req.user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="unknown user_id")
+    return await recommendation_session_service.create_session(
+        req.user_id,
+        req.journey_type,
+        req.input_context,
+        [],
+        conversation_id=req.conversation_id,
+    )
+
+
+@app.get("/recommendations/session/{session_id}")
+async def get_recommendation_session(session_id: str, user_id: str):
+    data = await recommendation_session_service.get_session(user_id, session_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="unknown session_id")
+    return data

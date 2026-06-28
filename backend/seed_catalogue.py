@@ -129,6 +129,7 @@ def _partner_rows(partners: list[dict]) -> list[dict]:
 async def main() -> None:
     cards = json.loads((_CATALOGUE_DIR / "hdfc_catalogue.json").read_text("utf-8"))
     partners = json.loads((_CATALOGUE_DIR / "transfer_partners.json").read_text("utf-8"))
+    reward_items = json.loads((_CATALOGUE_DIR / "reward_items.json").read_text("utf-8"))
 
     card_ids = [CARD_ID[c["card_name"]] for c in cards]
     pool = await db.get_pool()
@@ -213,7 +214,45 @@ async def main() -> None:
                 )
                 n_partners += 1
 
-    print(f"Loaded {len(cards)} cards, {n_benefits} benefits, {n_partners} transfer partners.")
+            n_reward_items = 0
+            for item in reward_items:
+                await conn.execute(
+                    """
+                    INSERT INTO reward_items
+                        (id, catalogue_name, title, description, category, subcategory,
+                         brand, provider, points_price, cash_price_inr, points_plus_cash,
+                         inventory_status, fulfillment_type, metadata, is_active)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,TRUE)
+                    ON CONFLICT (id) DO UPDATE SET
+                        catalogue_name=EXCLUDED.catalogue_name,
+                        title=EXCLUDED.title,
+                        description=EXCLUDED.description,
+                        category=EXCLUDED.category,
+                        subcategory=EXCLUDED.subcategory,
+                        brand=EXCLUDED.brand,
+                        provider=EXCLUDED.provider,
+                        points_price=EXCLUDED.points_price,
+                        cash_price_inr=EXCLUDED.cash_price_inr,
+                        points_plus_cash=EXCLUDED.points_plus_cash,
+                        inventory_status=EXCLUDED.inventory_status,
+                        fulfillment_type=EXCLUDED.fulfillment_type,
+                        metadata=EXCLUDED.metadata,
+                        is_active=TRUE
+                    """,
+                    item["id"], item["catalogue_name"], item["title"], item["description"],
+                    item["category"], item.get("subcategory"), item.get("brand"),
+                    item.get("provider"), item["points_price"], item.get("cash_price_inr"),
+                    json.dumps(item.get("points_plus_cash")) if item.get("points_plus_cash") else None,
+                    item.get("inventory_status", "in_stock"),
+                    item.get("fulfillment_type", "delivery"),
+                    json.dumps(item.get("metadata")) if item.get("metadata") else None,
+                )
+                n_reward_items += 1
+
+    print(
+        f"Loaded {len(cards)} cards, {n_benefits} benefits, "
+        f"{n_partners} transfer partners, {n_reward_items} reward items."
+    )
     print("benefit_embeddings cleared via cascade — run ingest_embeddings.py next.")
     await db.close_pool()
 

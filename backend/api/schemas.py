@@ -9,6 +9,27 @@ from pydantic import BaseModel, Field
 IntentKind = Literal[
     "greeting", "check_expiry", "explore_benefits", "redeem", "transfer", "unknown"
 ]
+JourneyType = Literal[
+    "travel_flight",
+    "travel_hotel",
+    "product_purchase",
+    "home_setup",
+    "gift_purchase",
+    "voucher_redemption",
+    "cashback_or_statement_credit",
+    "transfer_partner_redemption",
+    "card_benefit_lookup",
+    "points_expiry_help",
+    "general_reward_advice",
+]
+ResponseType = Literal[
+    "follow_up_question",
+    "recommendation",
+    "confirmation",
+    "execution_result",
+    "general_answer",
+]
+FulfillmentPath = Literal["demo", "api", "assisted", "bank"]
 
 
 class Intent(BaseModel):
@@ -17,15 +38,13 @@ class Intent(BaseModel):
     card_id: Optional[str] = None
     category: Optional[str] = None
     urgency: bool = False
-
-
-FulfillmentPath = Literal["demo", "api", "assisted", "bank"]
+    journey_type: Optional[JourneyType] = None
+    slots: dict[str, Any] = Field(default_factory=dict)
 
 
 class FulfillmentOption(BaseModel):
-    """A way to actually fulfil a candidate. `live` options (api/assisted/bank) book
-    for real and spend real points; the `demo` option is always present, mimics the
-    booking, and spends demo_points so the demo is replayable."""
+    """A way to actually fulfil a candidate."""
+
     provider_id: str
     label: str
     path: FulfillmentPath = "demo"
@@ -36,7 +55,7 @@ class FulfillmentOption(BaseModel):
 
 
 class Candidate(BaseModel):
-    kind: Literal["redemption", "transfer", "expiry", "perk"]
+    kind: Literal["redemption", "transfer", "expiry", "perk", "product"]
     candidate_id: Optional[str] = None
     card_id: str
     card_name: str
@@ -50,9 +69,7 @@ class Candidate(BaseModel):
     expiry_urgent: bool = False
     source_url: Optional[str] = None
     note: Optional[str] = None
-    # Phase 8 — bank-sourced T&C caveat (blackout / excluded / expiry), shown before booking.
     caveat: Optional[str] = None
-    # Phase 6 — 5-dimension scoring (deterministic, 0–100)
     score_financial: Optional[float] = None
     score_lifestyle: Optional[float] = None
     score_redemption_prob: Optional[float] = None
@@ -60,8 +77,10 @@ class Candidate(BaseModel):
     score_flexibility: Optional[float] = None
     score_total: Optional[float] = None
     rank: Optional[int] = None
-    # Phase 9 — how this candidate can be booked (live providers + always demo).
     fulfillment_options: list[FulfillmentOption] = Field(default_factory=list)
+    item_id: Optional[str] = None
+    cash_price_inr: Optional[int] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolCall(BaseModel):
@@ -74,6 +93,7 @@ class ChatRequest(BaseModel):
     user_id: str
     message: str
     session_id: Optional[str] = None
+    conversation_id: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -83,8 +103,17 @@ class ChatResponse(BaseModel):
     candidates: list[Candidate]
     reply: str
     tool_trace: list[ToolCall]
-    # Phase 7 will set this true once Claude does the reranking/explanation.
     claude_used: bool = False
+    conversation_id: Optional[str] = None
+    message: str = ""
+    response_type: ResponseType = "general_answer"
+    journey_type: Optional[JourneyType] = None
+    known_slots: dict[str, Any] = Field(default_factory=dict)
+    missing_slots: list[str] = Field(default_factory=list)
+    recommendations: list[dict[str, Any]] = Field(default_factory=list)
+    requires_confirmation: bool = False
+    memory_updates: list[str] = Field(default_factory=list)
+    next_actions: list[str] = Field(default_factory=list)
 
 
 class SmsRequest(BaseModel):
@@ -106,7 +135,7 @@ class RedeemRequest(BaseModel):
     candidate_id: str
     provider_id: str
     mode: Literal["demo", "production"] = "demo"
-    consent: bool = False  # required for any production (real) booking
+    consent: bool = False
     traveler: Optional[Traveler] = None
 
 
@@ -121,7 +150,7 @@ class RedeemResponse(BaseModel):
     transaction_id: str
     confirmation_reference: Optional[str] = None
     provider_id: str
-    path: Optional[str] = None
+    path: Optional[FulfillmentPath] = None
     mode: Literal["demo", "production"]
     option_label: str
     card_id: str
@@ -148,3 +177,71 @@ class BookingSessionResponse(BaseModel):
     otp_deadline: float
     confirmation_reference: Optional[str] = None
     error_message: Optional[str] = None
+
+
+class ConversationCreateRequest(BaseModel):
+    user_id: str
+    message: str = ""
+
+
+class ConversationMessageRequest(BaseModel):
+    user_id: str
+    message: str
+
+
+class PreferencePatchRequest(BaseModel):
+    destination_type: Optional[str] = None
+    trip_length: Optional[str] = None
+    region_preference: Optional[str] = None
+    accommodation_tier: Optional[str] = None
+    flight_preference: Optional[str] = None
+    departure_preference: Optional[str] = None
+    travel_weight: Optional[float] = None
+    dining_weight: Optional[float] = None
+    shopping_weight: Optional[float] = None
+    cashback_weight: Optional[float] = None
+    experiences_weight: Optional[float] = None
+    value_sensitivity_threshold: Optional[float] = None
+
+
+class AddressRequest(BaseModel):
+    user_id: str
+    label: str
+    line1: str
+    line2: Optional[str] = None
+    city: str
+    state: str
+    postal_code: str
+    country: str = "India"
+    is_default: bool = False
+
+
+class RecommendationSessionRequest(BaseModel):
+    user_id: str
+    conversation_id: Optional[str] = None
+    journey_type: JourneyType
+    input_context: dict[str, Any] = Field(default_factory=dict)
+
+
+class RedemptionQuoteRequest(BaseModel):
+    user_id: str
+    item_id: str
+
+
+class RedemptionConfirmRequest(BaseModel):
+    user_id: str
+    order_id: str
+
+
+class RedemptionExecuteRequest(BaseModel):
+    user_id: str
+    order_id: str
+
+
+class PluginContextRequest(BaseModel):
+    user_id: str
+    context_type: str = "merchant_context"
+    merchant: Optional[str] = None
+    page: Optional[str] = None
+    category: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
