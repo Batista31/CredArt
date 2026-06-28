@@ -107,20 +107,24 @@ model TncVersion {
 }
 
 model User {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name      String   @db.VarChar(128)
-  email     String   @unique @db.VarChar(256)
-  phone     String?  @db.VarChar(16)
-  city      String?  @db.VarChar(64)
-  state     String?  @db.VarChar(64)
-  country   String   @default("India") @db.VarChar(64)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String    @db.VarChar(128)
+  email       String    @unique @db.VarChar(256)
+  phone       String?   @db.VarChar(16)
+  dateOfBirth DateTime? @map("date_of_birth") @db.Date
+  city        String?   @db.VarChar(64)
+  state       String?   @db.VarChar(64)
+  country     String    @default("India") @db.VarChar(64)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz
   userCards            UserCard[]
   preferences          Preference?
   redemptionHistory    RedemptionHistory[]
   recommendationEvents RecommendationEvent[]
   smsMessages          SmsMessage[]
+  addresses            UserAddress[]
+  wishlist             CmrWishlist[]
+  dismissed            CmrDismissed[]
   @@map("users")
 }
 
@@ -187,9 +191,60 @@ model Preference {
   valueSensitivityThreshold  Decimal?  @map("value_sensitivity_threshold") @db.Decimal(6, 4)
   totalRedemptions           Int       @default(0) @map("total_redemptions")
   totalDismissals            Int       @default(0) @map("total_dismissals")
+  // CMR — extended taste profile (optional, safe defaults).
+  preferredAirlines          String[]  @default([]) @map("preferred_airlines")
+  preferredHotelChains       String[]  @default([]) @map("preferred_hotel_chains")
+  preferredCuisines          String[]  @default([]) @map("preferred_cuisines")
+  dietaryRestrictions        String[]  @default([]) @map("dietary_restrictions")
+  familySize                 Int       @default(1) @map("family_size")
   updatedAt                  DateTime  @updatedAt @map("updated_at") @db.Timestamptz
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   @@map("preferences")
+}
+
+// CMR — saved delivery addresses (one or more per user, one default).
+model UserAddress {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  label        String   @default("Home") @db.VarChar(32)
+  addressLine1 String   @map("address_line1") @db.Text
+  addressLine2 String?  @map("address_line2") @db.Text
+  city         String   @db.VarChar(64)
+  state        String?  @db.VarChar(64)
+  pincode      String   @db.VarChar(10)
+  isDefault    Boolean  @default(false) @map("is_default")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+  @@map("user_addresses")
+}
+
+// CMR — benefits the user wishlisted (interested, not yet redeemed).
+model CmrWishlist {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  label     String   @db.Text
+  cardId    String?  @map("card_id") @db.VarChar(64)
+  category  String?  @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, label])
+  @@index([userId])
+  @@map("cmr_wishlist")
+}
+
+// CMR — benefits the user dismissed (never recommend again).
+model CmrDismissed {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  label     String   @db.Text
+  cardId    String?  @map("card_id") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, label])
+  @@index([userId])
+  @@map("cmr_dismissed")
 }
 
 model RedemptionHistory {
