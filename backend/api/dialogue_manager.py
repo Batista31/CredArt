@@ -134,6 +134,7 @@ async def _llm_postcandidate_check(
     intent: Any,
     history: list[dict],
     candidates: list[dict],
+    known_slots: dict | None = None,
 ) -> tuple[bool, str | None]:
     """Second LLM round: given the fetched candidates, ask one more question if needed.
 
@@ -146,6 +147,17 @@ async def _llm_postcandidate_check(
     try:
         from services.llm_service import llm_check_completeness
         intent_dict = intent.model_dump() if hasattr(intent, "model_dump") else dict(intent)
+        # Merge known_slots into the intent dict so the LLM sees all accumulated context,
+        # not just what was extracted from the current message alone.
+        if known_slots:
+            intent_dict["slots"] = {**intent_dict.get("slots", {}), **known_slots}
+            # Promote top-level flight fields if still null
+            if not intent_dict.get("origin"):
+                intent_dict["origin"] = known_slots.get("origin")
+            if not intent_dict.get("destination"):
+                intent_dict["destination"] = known_slots.get("destination")
+            if not intent_dict.get("depart_date"):
+                intent_dict["depart_date"] = known_slots.get("departure_window")
         return await llm_check_completeness(intent_dict, history, candidates=candidates)
     except Exception as exc:
         print(f"[dialogue] post-candidate LLM check failed ({exc}), showing recommendations")
@@ -163,7 +175,7 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
         conversation = await conversation_service.get_conversation(user_id, conversation_id)
     if conversation is None:
         conversation = await conversation_service.create_conversation(user_id, message)
-        conversation_id = conversation["id"]
+        conversation_id = str(conversation["id"])
 
     existing_state = await conversation_service.get_state(conversation_id) or {}
     await conversation_service.add_message(conversation_id, "user", message)
@@ -175,7 +187,13 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
     rec_state = existing_state.get("recommendation_state") or {}
     partial_intent_dict = rec_state.get("partial_intent") if isinstance(rec_state, dict) else None
     intent = await extract_intent(message, partial_intent=partial_intent_dict, conversation_history=conv_history_dicts)
-    journey_type = intent.journey_type or existing_state.get("journey_type") or "general_reward_advice"
+    # If previous turn was asking for slot fills, keep the established journey_type
+    # so follow-up answers ("Mumbai, 2 people") don't re-classify the intent.
+    prior_response_type = existing_state.get("response_type")
+    if prior_response_type == "follow_up_question" and existing_state.get("journey_type"):
+        journey_type = existing_state["journey_type"]
+    else:
+        journey_type = intent.journey_type or existing_state.get("journey_type") or "general_reward_advice"
     known_slots = _merge_slots(existing_state.get("known_slots") or {}, intent.slots)
     known_slots = _merge_slots(memory.get("structured_preferences") or {}, known_slots)
     # Carry flight fields into known_slots for continuity across turns.
@@ -185,6 +203,15 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
         known_slots["destination"] = intent.destination
     if intent.depart_date:
         known_slots["departure_window"] = intent.depart_date
+    # Normalize city names → IATA codes so slot-fill answers like "Bengaluru" are usable.
+    if journey_type == "travel_flight":
+        from .intent import CITY_TO_IATA
+        for field in ("origin", "destination"):
+            v = (known_slots.get(field) or "").strip()
+            if v and len(v) != 3:  # not already IATA
+                iata = CITY_TO_IATA.get(v.lower())
+                if iata:
+                    known_slots[field] = iata
     missing_slots = _missing_slots(journey_type, known_slots)
 
     cards = await user_service.get_user_cards(user_id)
@@ -197,8 +224,8 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
     requires_confirmation = False
     memory_updates: list[str] = []
 
-    # --- Layer 1 deterministic slot check ---
-    if missing_slots:
+    # --- Layer 1 deterministic slot check (skip for greetings / simple intent kinds / always-complete journeys) ---
+    if missing_slots and intent.kind not in ("greeting", "check_expiry", "unknown") and journey_type not in _NEVER_FOLLOWUP_JOURNEYS:
         response_type = "follow_up_question"
         assistant_message = _follow_up_message(journey_type, missing_slots)
         await conversation_service.upsert_unfinished_task(
@@ -226,7 +253,7 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
         recommendations = [_home_item_to_candidate(item) for item in items]
         # --- Layer 2: post-candidate LLM follow-up loop ---
         is_complete, llm_followup = await _llm_postcandidate_check(
-            intent, conv_history_dicts, recommendations)
+            intent, conv_history_dicts, recommendations, known_slots=known_slots)
         if not is_complete and llm_followup:
             response_type = "follow_up_question"
             assistant_message = llm_followup
@@ -246,7 +273,7 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
         recommendations = [c.model_dump() for c in legacy_candidates]
         # --- Layer 2: post-candidate LLM follow-up loop ---
         is_complete, llm_followup = await _llm_postcandidate_check(
-            intent, conv_history_dicts, recommendations)
+            intent, conv_history_dicts, recommendations, known_slots=known_slots)
         if not is_complete and llm_followup:
             response_type = "follow_up_question"
             assistant_message = llm_followup
@@ -290,7 +317,7 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
         status="ready" if recommendations else "draft",
     )
     return {
-        "conversation_id": conversation_id,
+        "conversation_id": str(conversation_id) if conversation_id is not None else None,
         "message": assistant_message,
         "response_type": response_type,
         "journey_type": journey_type,
@@ -304,5 +331,5 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
         "candidates": candidates,
         "tool_trace": tool_trace,
         "claude_used": False,
-        "recommendation_session_id": rec_session["id"],
+        "recommendation_session_id": str(rec_session["id"]) if rec_session.get("id") else None,
     }

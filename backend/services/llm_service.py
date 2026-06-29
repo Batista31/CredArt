@@ -45,7 +45,9 @@ Rules:
 - category: infer from context (flights/hotels→TRAVEL, food→DINING, movie→ENTERTAINMENT, etc.)
 - card_id: only set if user names a specific card
 - journey_type: choose the closest real-world journey
-- slots: only include clearly stated structured details (for example style, destination, budget, room_type, required_products)
+- slots: extract any clearly stated structured details. Common keys: origin, destination, departure_window (date or "this weekend"), passengers, cabin_class, check_in_window, nights, guests, room_type, style, budget, required_products, recipient_type, occasion, goal
+- origin/destination: city names as-is (don't convert to IATA codes)
+- departure_window: any date expression ("28th June", "this weekend", "next Friday", "2026-06-28")
 """
 
 _RERANK_SYSTEM = """You are CredArt's recommendation engine. You receive a ranked candidate list (already scored by a deterministic engine) and the user's message, and you write a concise, helpful reply.
@@ -123,11 +125,30 @@ async def _llm_call(system: str, user: str) -> tuple[str, bool]:
     raise RuntimeError("No LLM API key available (GROQ_API_KEY or GEMINI_API_KEY required)")
 
 
-async def llm_extract_intent(message: str) -> dict | None:
-    """Returns parsed intent dict or None on failure (caller falls back to heuristic)."""
+async def llm_extract_intent(
+    message: str,
+    history: list[dict] | None = None,
+    partial_intent: dict | None = None,
+) -> dict | None:
+    """Returns parsed intent dict or None on failure (caller falls back to heuristic).
+
+    When history/partial_intent provided, the message is treated as a follow-up
+    answer so the LLM can extract slot values in context (e.g. "28th June" → departure_window).
+    """
     try:
-        raw, _ = await _llm_call(_INTENT_SYSTEM, message)
-        # Strip markdown fences if model wraps in ```json
+        if history or partial_intent:
+            context_note = ""
+            if partial_intent:
+                context_note = f"\nCurrent partial intent: {json.dumps(partial_intent)}\n"
+            if history:
+                last = history[-4:]
+                context_note += "\nRecent conversation:\n" + "\n".join(
+                    f"{m['role'].upper()}: {m['content']}" for m in last
+                )
+            user_payload = f"{context_note}\nNew user message: {message}\n\nExtract updated intent including any slot values the user just provided (e.g. city names, dates, passenger counts, cabin class, budgets). If this message is answering a previous question, set kind=unknown so the prior intent kind is preserved."
+            raw, _ = await _llm_call(_INTENT_SYSTEM, user_payload)
+        else:
+            raw, _ = await _llm_call(_INTENT_SYSTEM, message)
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         return json.loads(raw)
     except Exception as e:
