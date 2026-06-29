@@ -44,7 +44,13 @@ Rules:
 - urgency=true: user signals time pressure around expiry
 - category: infer from context (flights/hotels→TRAVEL, food→DINING, movie→ENTERTAINMENT, etc.)
 - card_id: only set if user names a specific card
-- journey_type: choose the closest real-world journey
+- journey_type: choose the closest real-world journey. IMPORTANT:
+  * buying a physical product/gadget/merchandise with points (phone, laptop, headphones,
+    watch, appliance, phone stand, shoes, anything orderable) → product_purchase
+  * a gift for someone → gift_purchase
+  * a brand voucher/gift card (Amazon, Swiggy, Flipkart) → voucher_redemption
+  * flights/"fly"/airport → travel_flight; hotels/stay/resort → travel_hotel
+  * only use general_reward_advice when the user is vague with no concrete goal
 - slots: extract any clearly stated structured details. Common keys: origin, destination, departure_window (date or "this weekend"), passengers, cabin_class, check_in_window, nights, guests, room_type, style, budget, required_products, recipient_type, occasion, goal
 - origin/destination: city names as-is (don't convert to IATA codes)
 - departure_window: any date expression ("28th June", "this weekend", "next Friday", "2026-06-28")
@@ -183,14 +189,21 @@ Rules:
 - travel_hotel needs: destination, check_in date, number of nights
 - home_setup needs: room_type or required_products
 - product_purchase / gift_purchase needs: what item, budget or points range
+- transfer_partner_redemption needs: a goal (best value / specific airline). Once a
+  goal or airline preference is known, mark complete — the candidates ARE the answer.
 - general_reward_advice / card_benefit_lookup: always complete — no follow-up
 - points_expiry_help: always complete
 - Only ask ONE question per turn. Pick the single most valuable missing slot.
 - If slots dict already has the info, mark complete even if intent.kind is vague.
 - When candidates are provided: review them. If they all share an ambiguity you
   could resolve (e.g. economy vs business, specific city vs region), ask. If they
-  are a good match, mark complete.
+  are a good match, mark complete. Two or more good candidates → almost always complete.
+- NEVER ask for information the system already owns: card IDs, card/account numbers,
+  point balances, user IDs, internal references. The user only answers about their
+  own intent (trip details, preferences, budget, recipient) — never system internals.
 - Never ask a question whose answer is already in history or slots.
+- Prefer completeness. Ask at most one clarifying question after candidates exist;
+  if you already asked one, mark complete.
 """
 
 

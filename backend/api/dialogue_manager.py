@@ -195,7 +195,26 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
     else:
         journey_type = intent.journey_type or existing_state.get("journey_type") or "general_reward_advice"
     known_slots = _merge_slots(existing_state.get("known_slots") or {}, intent.slots)
-    known_slots = _merge_slots(memory.get("structured_preferences") or {}, known_slots)
+    # Only pull in memory preferences RELEVANT to this journey, so travel slots from a
+    # past session don't pollute (e.g.) a voucher conversation.
+    _reqs = _journey_requirements(journey_type)
+    _allowed = set(_reqs["required"]) | set(_reqs["optional"])
+    _mem_prefs = memory.get("structured_preferences") or {}
+    if isinstance(_mem_prefs, str):
+        try:
+            _mem_prefs = json.loads(_mem_prefs)
+        except json.JSONDecodeError:
+            _mem_prefs = {}
+    _scoped_mem = {k: v for k, v in _mem_prefs.items() if k in _allowed}
+    known_slots = _merge_slots(_scoped_mem, known_slots)
+    # Safety net: if the prior turn asked for slots and the LLM extracted nothing for any
+    # of them, assign the user's reply to the first still-missing asked slot so the
+    # follow-up loop always makes progress instead of re-asking the same question.
+    if prior_response_type == "follow_up_question":
+        _prev_missing = existing_state.get("missing_slots") or []
+        _still = [s for s in _prev_missing if known_slots.get(s) in (None, "", [])]
+        if _prev_missing and len(_still) == len(_prev_missing) and message.strip():
+            known_slots[_still[0]] = message.strip()
     # Carry flight fields into known_slots for continuity across turns.
     if intent.origin:
         known_slots["origin"] = intent.origin
@@ -224,64 +243,116 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
     requires_confirmation = False
     memory_updates: list[str] = []
 
-    # --- Layer 1 deterministic slot check (skip for greetings / simple intent kinds / always-complete journeys) ---
-    if missing_slots and intent.kind not in ("greeting", "check_expiry", "unknown") and journey_type not in _NEVER_FOLLOWUP_JOURNEYS:
+    # --- Context-gathering: the Query Generator plans natural questions for exploratory
+    #     journeys (travel, merchandise, gifts) before we recommend; the static slot check
+    #     is the fallback for everything else. ---
+    from services import query_generator
+    use_planner = (
+        journey_type in query_generator.PLANNED_JOURNEYS
+        and intent.kind not in ("greeting", "check_expiry", "unknown")
+    )
+    plan = None
+    confirmation_recap = None
+    if use_planner:
+        plan = await query_generator.next_context_question(
+            journey_type, known_slots, conv_history_dicts, intent.query or message)
+
+    if use_planner and plan and not plan.get("ready") and plan.get("question"):
+        # Still gathering context — ask the planner's next question.
+        response_type = "follow_up_question"
+        assistant_message = plan["question"]
+        missing_slots = [plan.get("slot") or "detail"]
+        await conversation_service.upsert_unfinished_task(
+            user_id, conversation_id, journey_type, conversation["title"], known_slots, status="open")
+        next_actions = ["answer_question"]
+    elif (not use_planner and missing_slots
+          and intent.kind not in ("greeting", "check_expiry", "unknown")
+          and journey_type not in _NEVER_FOLLOWUP_JOURNEYS):
+        # Static fallback questioning for non-planned journeys with required slots.
         response_type = "follow_up_question"
         assistant_message = _follow_up_message(journey_type, missing_slots)
         await conversation_service.upsert_unfinished_task(
-            user_id,
-            conversation_id,
-            journey_type,
-            conversation["title"],
-            known_slots,
-            status="open",
-        )
+            user_id, conversation_id, journey_type, conversation["title"], known_slots, status="open")
         next_actions = [f"answer_{slot}" for slot in missing_slots[:3]]
-    elif journey_type in ("home_setup", "product_purchase", "gift_purchase", "voucher_redemption"):
-        style_tags = []
-        if known_slots.get("style"):
-            style_tags.append(str(known_slots["style"]))
-        search_term = known_slots.get("required_products") or known_slots.get("product_category") or message
-        if isinstance(search_term, list):
-            search_term = " ".join(str(part) for part in search_term)
-        items = await reward_catalogue_service.search_reward_items(
-            query=str(search_term),
-            category="travel" if journey_type == "voucher_redemption" else None,
-            style_tags=style_tags,
-            top_k=5,
-        )
-        recommendations = [_home_item_to_candidate(item) for item in items]
-        # --- Layer 2: post-candidate LLM follow-up loop ---
-        is_complete, llm_followup = await _llm_postcandidate_check(
-            intent, conv_history_dicts, recommendations, known_slots=known_slots)
-        if not is_complete and llm_followup:
-            response_type = "follow_up_question"
-            assistant_message = llm_followup
-            next_actions = ["answer_question"]
-        else:
-            response_type = "recommendation"
-            assistant_message = (
-                "I’ve got a shortlist that matches what you told me. "
-                "I focused on items that fit your style and points budget rather than just the cheapest options."
-            )
-            next_actions = ["review_recommendations", "ask_for_quote", "confirm_redemption"]
-            requires_confirmation = True
     else:
-        legacy_candidates, trace, meta = await orchestrate(intent, user, cards)
-        candidates = legacy_candidates
-        tool_trace = [t.model_dump() for t in trace]
-        recommendations = [c.model_dump() for c in legacy_candidates]
-        # --- Layer 2: post-candidate LLM follow-up loop ---
-        is_complete, llm_followup = await _llm_postcandidate_check(
-            intent, conv_history_dicts, recommendations, known_slots=known_slots)
-        if not is_complete and llm_followup:
-            response_type = "follow_up_question"
-            assistant_message = llm_followup
-            next_actions = ["answer_question"]
+        # READY to recommend (planner said so, or a non-planned journey with no missing slots).
+        if use_planner and plan:
+            confirmation_recap = plan.get("confirmation")
+        missing_slots = []
+        if journey_type in ("home_setup", "product_purchase", "gift_purchase", "merchandise_purchase"):
+            search_term = known_slots.get("item") or known_slots.get("product_category") or known_slots.get("required_products") or intent.query or message
+            if isinstance(search_term, list):
+                search_term = " ".join(str(part) for part in search_term)
+            # Real merchandise via the credits→Amazon-voucher path.
+            from services import merchandise_service
+            merch_cands = await merchandise_service.search_merchandise_candidates(str(search_term), cards)
+            if merch_cands:
+                candidates = merch_cands
+                recommendations = [c.model_dump() for c in merch_cands]
+                response_type = "recommendation"
+                top = merch_cands[0]
+                assistant_message = (confirmation_recap + " " if confirmation_recap else "") + (
+                    f"Your {top.card_name} points convert to an Amazon voucher, and I found real matches for “{search_term}”. "
+                    f"My pick: {top.label} ({top.best_use_case}). Tap to convert your points and order it.")
+                next_actions = ["review_recommendations", "redeem_best_option"]
+                requires_confirmation = True
+            else:
+                # No product match → fall back to the bank catalogue so we still surface
+                # something real (vouchers etc.) rather than an empty list.
+                legacy_candidates, trace, meta = await orchestrate(intent, user, cards)
+                candidates = legacy_candidates
+                tool_trace = [t.model_dump() for t in trace]
+                recommendations = [c.model_dump() for c in legacy_candidates]
+                response_type = "recommendation" if legacy_candidates else "general_answer"
+                assistant_message = (confirmation_recap + " " if confirmation_recap else "") + meta["reply"]
+                next_actions = ["compare_options", "redeem_best_option"] if legacy_candidates else ["clarify_goal"]
         else:
-            response_type = "recommendation" if legacy_candidates else "general_answer"
-            assistant_message = meta["reply"]
-            next_actions = ["compare_options", "check_transfer_partner", "redeem_best_option"] if legacy_candidates else ["clarify_goal"]
+            # Real flight options (Duffel) / storefront hotel options when bookable.
+            flight_cands = []
+            if journey_type == "travel_flight":
+                from services import flight_service
+                flight_cands = await flight_service.search_flight_candidates(known_slots, cards)
+            hotel_cands = []
+            if not flight_cands and journey_type == "travel_hotel":
+                from services import hotel_service
+                hotel_cands = hotel_service.search_hotel_candidates(known_slots, cards)
+            if flight_cands:
+                candidates = flight_cands
+                recommendations = [c.model_dump() for c in flight_cands]
+                response_type = "recommendation"
+                n = len(flight_cands)
+                assistant_message = (confirmation_recap + " " if confirmation_recap else "") + (
+                    f"Here {'is' if n == 1 else 'are'} {n} live flight option{'' if n == 1 else 's'} I can book with your points — "
+                    "fares are pulled in real time from our flight partner and priced into points at your card's SmartBuy rate.")
+                next_actions = ["compare_options", "redeem_best_option"]
+                requires_confirmation = True
+            elif hotel_cands:
+                candidates = hotel_cands
+                recommendations = [c.model_dump() for c in hotel_cands]
+                response_type = "recommendation"
+                assistant_message = (confirmation_recap + " " if confirmation_recap else "") + (
+                    "Here are stays I can book with your points through our hotel partners — "
+                    "rates are the partners' published nightly price, converted to points at your card's rate.")
+                next_actions = ["compare_options", "redeem_best_option"]
+                requires_confirmation = True
+            else:
+                legacy_candidates, trace, meta = await orchestrate(intent, user, cards)
+                candidates = legacy_candidates
+                tool_trace = [t.model_dump() for t in trace]
+                recommendations = [c.model_dump() for c in legacy_candidates]
+                if not use_planner:
+                    # Non-planned journeys keep the original post-candidate LLM follow-up loop.
+                    is_complete, llm_followup = await _llm_postcandidate_check(
+                        intent, conv_history_dicts, recommendations, known_slots=known_slots)
+                    if not is_complete and llm_followup:
+                        response_type = "follow_up_question"
+                        assistant_message = llm_followup
+                        next_actions = ["answer_question"]
+                        recommendations, candidates, tool_trace = [], [], []
+                if response_type != "follow_up_question":
+                    response_type = "recommendation" if legacy_candidates else "general_answer"
+                    assistant_message = (confirmation_recap + " " if confirmation_recap else "") + meta["reply"]
+                    next_actions = ["compare_options", "check_transfer_partner", "redeem_best_option"] if legacy_candidates else ["clarify_goal"]
 
     # Persist partial intent inside recommendation_state so next turn can merge it.
     intent_snapshot = intent.model_dump(exclude={"is_complete", "follow_up_question"})

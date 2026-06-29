@@ -149,8 +149,10 @@ async def _finalize(txn_id, user_id, candidate, provider, traveler, mode, row) -
     label = candidate.get("label", "reward")
     stored_label = f"[demo] {label}" if is_demo else label
 
-    # Pre-booking points lock — stop two concurrent redemptions from double-spending.
-    lock_client = _lock_client()
+    # Pre-booking points lock — stop two concurrent redemptions from double-spending
+    # REAL points. Demo redemptions spend a separate demo_points bucket and are meant
+    # to be replayable (see CLAUDE.md), so they never take the lock.
+    lock_client = None if is_demo else _lock_client()
     lock_key = f"credart:lock:{user_id}:{card_id}"
     if lock_client is not None:
         acquired = await lock_client.set(lock_key, txn_id, nx=True, ex=120)

@@ -50,7 +50,7 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
         return _caveat_cache[cid]
 
     soonest = None
-    if intent.kind in ("greeting", "check_expiry", "redeem"):
+    if intent.kind in ("greeting", "check_expiry"):
         for card in cards:
             days = card["days_to_expiry"]
             if card["next_expiry_points"] and days is not None and days <= 30:
@@ -112,7 +112,7 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
 
     include_transfers = (
         intent.kind == "transfer"
-        or (intent.kind == "explore_benefits"
+        or (intent.kind in ("explore_benefits", "redeem")
             and (intent.category is None or intent.category == "TRAVEL"))
     )
     if include_transfers:
