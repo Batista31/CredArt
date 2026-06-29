@@ -62,7 +62,7 @@ class FulfillmentOption(BaseModel):
 
 
 class Candidate(BaseModel):
-    kind: Literal["redemption", "transfer", "expiry", "perk", "product"]
+    kind: Literal["redemption", "transfer", "expiry", "perk", "product", "flight", "hotel", "merchandise"]
     candidate_id: Optional[str] = None
     card_id: str
     card_name: str

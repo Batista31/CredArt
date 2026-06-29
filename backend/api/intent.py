@@ -26,6 +26,12 @@ _TRANSFER = ["transfer", "convert", "miles", "airline", "krisflyer", "vistara",
              "marriott", "bonvoy", "accor", "maharaja", "frequent flyer"]
 _REDEEM = ["redeem", "book", "use my points", "use my pts", "cash in", "spend my points", "get me"]
 _GREETING = ["hi", "hello", "hey", "good morning", "good evening", "namaste", "yo"]
+_BUY_WORDS = ["buy", "purchase", "order", "get me", "shop for", "want a", "want an", "looking for", "need a", "need an"]
+_PRODUCT_WORDS = ["phone", "smartphone", "iphone", "laptop", "macbook", "tablet", "ipad",
+                  "headphone", "earbud", "airpod", "watch", "smartwatch", "speaker", "camera",
+                  "tv", "television", "console", "playstation", "xbox", "gadget", "appliance",
+                  "mixer", "blender", "shoe", "sneaker", "bag", "backpack", "sunglass",
+                  "phone stand", "charger", "monitor", "keyboard", "mouse", "merchandise", "product"]
 
 CITY_TO_IATA = {
     "bangalore": "BLR", "bengaluru": "BLR", "mumbai": "BOM", "bombay": "BOM",
@@ -98,6 +104,13 @@ async def extract_intent(
             )
             from .session import merge_partial_intent
             merged = merge_partial_intent(partial_intent, current) if partial_intent else current
+            # Deterministic journey override: smaller LLMs often mislabel "buy a <product>
+            # with points" as general advice. If the text clearly names orderable
+            # merchandise, force product_purchase so the merchandise flow engages.
+            if merged.get("journey_type") in (None, "general_reward_advice", "card_benefit_lookup"):
+                if _match(text, _PRODUCT_WORDS) and _match(text, _BUY_WORDS):
+                    merged["journey_type"] = "product_purchase"
+                    merged.setdefault("kind", "redeem")
             is_complete = True
             follow_up_question = None
             if merged.get("kind") not in _ALWAYS_COMPLETE:
@@ -134,6 +147,8 @@ async def extract_intent(
         journey_type = "travel_flight"
     elif any(word in text for word in ("hotel", "stay", "resort")):
         journey_type = "travel_hotel"
+    elif _match(text, _PRODUCT_WORDS):
+        journey_type = "product_purchase"
     elif any(word in text for word in ("living room", "sofa", "rug", "coffee table", "home")):
         journey_type = "home_setup"
     elif any(word in text for word in ("voucher", "gift card")):
@@ -164,6 +179,10 @@ async def extract_intent(
         if budget_match and any(token in text for token in ("budget", "points", "pts", "inr", "rs")):
             slots["budget"] = budget_match.group(1).replace(",", "")
 
+    if journey_type == "product_purchase":
+        prod = next((w for w in _PRODUCT_WORDS if w in text), None)
+        if prod:
+            slots["product_category"] = prod
     if "for " in text and journey_type in ("product_purchase", "gift_purchase"):
         slots["recipient_type"] = text.split("for ", 1)[1][:30]
     if "to " in text and journey_type.startswith("travel"):
