@@ -76,7 +76,12 @@ async def extract_intent(
 
     # --- LLM path (Groq primary) ---
     from services.llm_service import llm_extract_intent
-    parsed = await llm_extract_intent(message)
+    # Only pass context when there IS an existing partial intent (slot-filling mode).
+    # Passing history without partial_intent makes Groq return kind=unknown even for new messages.
+    if partial_intent:
+        parsed = await llm_extract_intent(message, history=conversation_history, partial_intent=partial_intent)
+    else:
+        parsed = await llm_extract_intent(message)
     if parsed:
         try:
             current = dict(
