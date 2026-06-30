@@ -19,8 +19,10 @@ from .base import BookingResult, RedemptionProvider
 
 
 class WebsiteHotelProvider(RedemptionProvider):
+    path = "assisted"
     mode = "live"
     currency = "points"
+    requires_otp = True
 
     def __init__(self, provider_id: str, label: str) -> None:
         self.provider_id = provider_id

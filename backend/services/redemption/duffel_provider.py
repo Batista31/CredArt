@@ -1,12 +1,11 @@
 """Duffel flight provider — genuinely live in test mode.
 
-When DUFFEL_API_KEY (a `duffel_test_...` token) is set, this does a REAL
-booking against Duffel's sandbox: search offers -> create an instant order with
-passenger details, paid from the unlimited test balance. That satisfies the
-"actually fill details and book it" requirement without real money.
+Two surfaces:
+  search(...)  — real /air/offer_requests query by route/date/pax (used to DISPLAY options).
+  book(...)    — re-searches the candidate's route and creates a real /air/orders test order.
 
-Sandbox note: Duffel Airways (the test airline) reliably returns offers for an
-adult flying LHR -> JFK, so we use that route for the demo search.
+Offers expire (~20 min), so book() re-searches at redeem time and books a matching offer
+rather than relying on a stale offer id stored on the candidate.
 """
 
 from __future__ import annotations
@@ -23,8 +22,10 @@ _HEADERS_VERSION = "v2"
 class DuffelProvider(RedemptionProvider):
     provider_id = "duffel_flight"
     label = "Book flight (Duffel · live test)"
+    path = "api"
     mode = "live"
     currency = "points"
+    requires_otp = False
 
     def __init__(self) -> None:
         self.token = os.getenv("DUFFEL_API_KEY", "")
@@ -33,7 +34,7 @@ class DuffelProvider(RedemptionProvider):
         return bool(self.token)
 
     def unavailable_note(self) -> str | None:
-        return None if self.token else "set DUFFEL_API_KEY (duffel_test_…) to enable"
+        return None if self.token else "set DUFFEL_API_KEY (duffel_test_...) to enable"
 
     def _headers(self) -> dict:
         return {
@@ -44,15 +45,75 @@ class DuffelProvider(RedemptionProvider):
         }
 
     @staticmethod
-    def _resolve_date(value: str | None) -> str:
-        """A valid future ISO date, else the +30d sandbox default."""
-        default = (date.today() + timedelta(days=30)).isoformat()
-        if not value:
-            return default
+    def _default_date() -> str:
+        return (date.today() + timedelta(days=30)).isoformat()
+
+    @staticmethod
+    def _slice_summary(offer: dict) -> dict:
+        sl = offer["slices"][0]
+        segs = sl.get("segments", [])
+        dep = segs[0]["departing_at"] if segs else None
+        arr = segs[-1]["arriving_at"] if segs else None
+        return {
+            "duration": sl.get("duration"),
+            "stops": max(0, len(segs) - 1),
+            "departing_at": dep,
+            "arriving_at": arr,
+        }
+
+    async def search(
+        self,
+        origin: str,
+        destination: str,
+        depart_date: str | None = None,
+        passengers: int = 1,
+        cabin: str = "economy",
+        limit: int = 4,
+    ) -> list[dict]:
+        """Return up to `limit` normalized real offers, cheapest first. [] on any failure."""
+        if not self.token:
+            return []
         try:
-            return value if date.fromisoformat(value) > date.today() else default
-        except ValueError:
-            return default
+            import httpx
+        except Exception:
+            return []
+        dep = depart_date or self._default_date()
+        pax = [{"type": "adult"} for _ in range(max(1, int(passengers or 1)))]
+        try:
+            async with httpx.AsyncClient(timeout=40) as client:
+                r = await client.post(
+                    f"{_BASE}/air/offer_requests?return_offers=true",
+                    headers=self._headers(),
+                    json={"data": {
+                        "slices": [{"origin": origin, "destination": destination, "departure_date": dep}],
+                        "passengers": pax,
+                        "cabin_class": cabin,
+                    }},
+                )
+                r.raise_for_status()
+                offers = (r.json().get("data") or {}).get("offers") or []
+        except Exception as exc:  # noqa: BLE001
+            print(f"[duffel] search failed ({exc})")
+            return []
+
+        offers.sort(key=lambda o: float(o.get("total_amount") or 1e9))
+        out: list[dict] = []
+        for o in offers[:limit]:
+            s = self._slice_summary(o)
+            out.append({
+                "offer_id": o["id"],
+                "airline": o["owner"]["name"],
+                "airline_iata": o["owner"].get("iata_code"),
+                "amount": float(o["total_amount"]),
+                "currency": o["total_currency"],
+                "origin": origin,
+                "destination": destination,
+                "depart_date": dep,
+                "cabin": cabin,
+                "passengers": max(1, int(passengers or 1)),
+                **s,
+            })
+        return out
 
     async def book(self, candidate: dict, traveler: dict) -> BookingResult:
         if not self.token:
@@ -62,69 +123,81 @@ class DuffelProvider(RedemptionProvider):
         except Exception:
             return BookingResult(ok=False, error="httpx not installed")
 
-        # Route comes from the candidate (built from the user's intent); fall back
-        # to the known-good sandbox route when a candidate carries no flight info.
-        origin = (candidate.get("origin") or "LHR").upper()
-        destination = (candidate.get("destination") or "JFK").upper()
-        dep = self._resolve_date(candidate.get("depart_date"))
+        meta = candidate.get("metadata") or {}
+        origin = candidate.get("origin") or meta.get("origin") or "BOM"
+        destination = candidate.get("destination") or meta.get("destination") or "DEL"
+        dep = candidate.get("depart_date") or meta.get("depart_date") or self._default_date()
+        passengers = int(meta.get("passengers") or 1)
+        cabin = meta.get("cabin") or "economy"
         steps: list[dict] = []
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                # 1. Search offers (route from intent, 1 adult).
-                offer_req = {
-                    "data": {
+            async with httpx.AsyncClient(timeout=40) as client:
+                # re-search the route (offers expire) and take a current offer
+                r = await client.post(
+                    f"{_BASE}/air/offer_requests?return_offers=true",
+                    headers=self._headers(),
+                    json={"data": {
                         "slices": [{"origin": origin, "destination": destination, "departure_date": dep}],
-                        "passengers": [{"type": "adult"}],
-                        "cabin_class": "economy",
-                    }
-                }
-                r = await client.post(f"{_BASE}/air/offer_requests?return_offers=true",
-                                      headers=self._headers(), json=offer_req)
+                        "passengers": [{"type": "adult"} for _ in range(passengers)],
+                        "cabin_class": cabin,
+                    }},
+                )
                 r.raise_for_status()
-                data = r.json()["data"]
-                offers = data.get("offers") or []
+                offers = (r.json().get("data") or {}).get("offers") or []
                 if not offers:
-                    return BookingResult(ok=False, error="no sandbox offers returned",
-                                         steps=[{"label": "Searching flights", "status": "failed",
-                                                 "detail": "no offers"}])
-                offer = offers[0]
-                pax_id = offer["passengers"][0]["id"]
-                amount, currency = offer["total_amount"], offer["total_currency"]
+                    return BookingResult(ok=False, error="no live offers for this route right now",
+                                         steps=[{"label": "Searching flights", "status": "failed", "detail": f"{origin}->{destination}"}])
+                # Try the shown airline first, then cheapest others. Some sandbox/GDS offers
+                # report "no longer available" at order time, so we retry across offers —
+                # exactly how a real booking agent handles transient availability.
+                want = meta.get("airline")
+                ordered = sorted(offers, key=lambda o: (o["owner"]["name"] != want, float(o.get("total_amount") or 1e9)))
                 steps.append({"label": "Searching flights", "status": "done",
-                              "detail": f"{origin}→{destination} {dep} · {offer['owner']['name']} {amount} {currency}"})
+                              "detail": f"{ordered[0]['owner']['name']} {origin}->{destination} {ordered[0]['total_amount']} {ordered[0]['total_currency']}"})
 
-                # 2. Create the order (instant) with passenger details + balance payment.
-                order_req = {
-                    "data": {
-                        "type": "instant",
-                        "selected_offers": [offer["id"]],
-                        "passengers": [{
-                            "id": pax_id,
-                            "title": "mrs",
-                            "gender": "f",
-                            "given_name": traveler.get("given_name", "Riya"),
-                            "family_name": traveler.get("family_name", "Sharma"),
-                            "born_on": "1995-01-01",
+                base_given = traveler.get("given_name", "Riya")
+                base_family = traveler.get("family_name", "Sharma")
+                _co = ["", "Vivaan", "Anaya", "Aarav", "Diya", "Kabir"]
+                last_err = "no bookable offer"
+                for offer in ordered[:6]:
+                    # distinct names — airlines reject duplicate passenger names
+                    passengers_payload = []
+                    for idx, p in enumerate(offer["passengers"]):
+                        given = base_given if idx == 0 else (_co[idx] if idx < len(_co) else f"Traveller{idx}")
+                        passengers_payload.append({
+                            "id": p["id"], "title": "mrs" if idx == 0 else "mr",
+                            "gender": "f" if idx == 0 else "m",
+                            "given_name": given, "family_name": base_family,
+                            "born_on": "1990-01-01",
                             "email": traveler.get("email", "riya@example.com"),
                             "phone_number": traveler.get("phone", "+919000000000"),
-                        }],
-                        "payments": [{"type": "balance", "amount": amount, "currency": currency}],
-                    }
-                }
-                r2 = await client.post(f"{_BASE}/air/orders",
-                                       headers=self._headers(), json=order_req)
-                if not r2.is_success:
+                        })
+                    resp = await client.post(
+                        f"{_BASE}/air/orders", headers=self._headers(),
+                        json={"data": {
+                            "type": "instant",
+                            "selected_offers": [offer["id"]],
+                            "passengers": passengers_payload,
+                            "payments": [{"type": "balance", "amount": offer["total_amount"], "currency": offer["total_currency"]}],
+                        }},
+                    )
+                    if resp.status_code in (200, 201):
+                        order = resp.json()["data"]
+                        ref = order.get("booking_reference") or order.get("id")
+                        steps.append({"label": "Booking flight", "status": "done", "detail": f"{offer['owner']['name']} · {ref}"})
+                        steps.append({"label": "Sending confirmation", "status": "done", "detail": ref})
+                        return BookingResult(ok=True, confirmation_reference=ref, steps=steps,
+                                             raw={"order_id": order.get("id")})
                     try:
-                        errs = r2.json().get("errors") or r2.json()
+                        errs = resp.json().get("errors", [])
+                        last_err = (errs[0].get("title") if errs else f"HTTP {resp.status_code}")
                     except Exception:
-                        errs = r2.text
-                    raise Exception(f"Duffel {r2.status_code}: {errs}")
-                order = r2.json()["data"]
-                ref = order.get("booking_reference") or order.get("id")
-                steps.append({"label": "Booking flight", "status": "done", "detail": ref})
-                steps.append({"label": "Sending confirmation", "status": "done", "detail": ref})
-                return BookingResult(ok=True, confirmation_reference=ref, steps=steps,
-                                     raw={"order_id": order.get("id")})
-        except Exception as e:
-            steps.append({"label": "Booking flight", "status": "failed", "detail": str(e)[:400]})
-            return BookingResult(ok=False, error=str(e)[:600], steps=steps)
+                        last_err = f"HTTP {resp.status_code}"
+                    # transient availability → try next offer; other errors → stop
+                    if not any((e.get("code") in ("offer_no_longer_available", "offer_request_already_actioned")) for e in (errs or [])):
+                        break
+                steps.append({"label": "Booking flight", "status": "failed", "detail": last_err})
+                return BookingResult(ok=False, error=last_err, steps=steps)
+        except Exception as exc:  # noqa: BLE001
+            steps.append({"label": "Booking flight", "status": "failed", "detail": str(exc)[:120]})
+            return BookingResult(ok=False, error=str(exc)[:200], steps=steps)

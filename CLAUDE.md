@@ -1,229 +1,163 @@
-# CLAUDE.md
+# CLAUDE.md — CredArt architecture & working notes
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+CredArt is a FastAPI-based AI rewards concierge for HDFC credit-card holders. It
+turns a chat message into a **pre-validated set of redemption candidates** and a
+helpful reply, while guaranteeing every number it shows is real (sourced from a
+bank-style catalogue + the user's own data), never invented by the LLM.
 
-## What This Is
+## The two layers (and the anti-hallucination boundary)
 
-CredArt is a white-label AI rewards concierge for banks (currently mocked for HDFC). The core design principle is **anti-hallucination by architecture**: the LLM only ever sees a pre-validated, deterministically-scored candidate set built by Layer 1 code—it never touches the database directly.
+```
+            ┌────────────────────────────────────────────────────────┐
+  user ───► │  FastAPI orchestrator (api/)                            │
+            │    intent → Layer 1 candidate assembly → scoring        │
+            │    → fulfilment options → LLM rerank/reply              │
+            └───────────────┬───────────────────────┬────────────────┘
+                            │                       │
+              Layer 1 (deterministic)         LLM (Groq/Gemini)
+              services/*  + Postgres          sees ONLY the candidate
+              + bank MCP (card-level)         set — never the DB
+```
 
-## Running the System
+- **Layer 1** = `backend/services/*` — all SQL + business logic. Deterministic.
+  Builds candidates, scores them (`scoring_service`), resolves fulfilment.
+- **Bank MCP server** (`mcp_server.py`, port 8000) exposes **card-level** catalogue
+  data only. It never sees user balances/history — that table boundary is the
+  structural anti-hallucination guarantee. The backend is its *client*
+  (`bank_mcp_client`, with in-process fallback).
+- **User data** (cards, points, preferences, CMR) enters via SMS parsing and the
+  CMR endpoints — never via the bank MCP.
+- **The LLM** (`llm_service`, Phase 7) receives ONLY the pre-validated candidate
+  set (`_candidates_to_json`) for reranking + a natural-language reply. It never
+  queries the DB and may not invent points/₹ values.
 
-Both servers must run simultaneously. The backend (port 8001) consumes the MCP server (port 8000) as a client.
+> **Golden rule:** anything that could be hallucinated (values, availability)
+> must be computed in Layer 1 and *passed to* the LLM, not asked of it.
+
+## Key files
+
+| Area | File |
+|------|------|
+| App + routes (port 8001) | `backend/api/main.py` |
+| Pydantic models | `backend/api/schemas.py` |
+| Intent extraction (LLM + heuristic) | `backend/api/intent.py` |
+| Candidate assembly | `backend/api/orchestrator.py` |
+| Conversation store | `backend/api/session.py` |
+| 5-dimension scoring | `backend/services/scoring_service.py` |
+| User/preferences reads | `backend/services/user_service.py` |
+| **CMR profile (this feature)** | `backend/services/cmr_service.py` |
+| Bank MCP client | `backend/services/bank_mcp_client.py` |
+| Redemption providers/executor | `backend/services/redemption/*` |
+| Schema (Prisma mirror) | `db/prisma/schema.prisma` |
+| Migrations | `db/prisma/migrations/NNNN_name/migration.sql` |
+| Demo reset | `db/reset_demo.sql` |
+
+## Demo users (seed 0005)
+
+| User | id | Cards |
+|------|----|-------|
+| Samyak Rao | `…0000000000001` | HDFC Infinia |
+| Riya Sharma | `…0000000000002` | Regalia Gold + Millennia |
+
+`db/reset_demo.sql` restores Riya's mutable state (points, ledger, preferences,
+CMR) to spec — run it before every demo. Demo redemptions spend a separate
+`demo_points` bucket so the live ledger is never corrupted and the demo is
+replayable.
+
+---
+
+# Customer Master Record (CMR)
+
+A single unified profile of a user beyond cards + points, so CredArt stops
+re-asking known facts and can make smarter, **deliverable** recommendations.
+
+**Boundary:** every CMR field feeds deterministic recommendation/scoring/delivery
+logic in Layer 1. None of it is ever handed to the LLM — the LLM still only sees
+the candidate set. The "confirm pre-filled values" reply text is built
+deterministically and appended *outside* the LLM call.
+
+All CMR columns are optional with safe defaults, so existing rows are unaffected.
+
+## What CMR stores (migration `0011_cmr`)
+
+1. **Extended user profile** — `users.date_of_birth` (plus existing
+   phone/email/city/state).
+2. **Extended preferences** — `preferences.preferred_airlines`,
+   `preferred_hotel_chains`, `preferred_cuisines`, `dietary_restrictions`
+   (all `TEXT[] DEFAULT '{}'`), and `family_size` (`INT DEFAULT 1`).
+3. **Saved addresses** — `user_addresses` (label, line1/2, city, state, pincode,
+   `is_default`). A partial-unique index enforces at most one default per user.
+4. **Wishlist** — `cmr_wishlist` (benefits the user liked but didn't redeem),
+   matched by `label`. Surfaced later with a small scoring boost.
+5. **Dismissed** — `cmr_dismissed` (benefits the user rejected). Filtered out of
+   future recommendations entirely.
+
+## How CMR changes behaviour
+
+- **Smarter ranking** (`scoring_service.score_candidates` + `cmr_service.preference_boost`):
+  after the deterministic 5-dim weighted score, a small boost is added —
+  `+8` if the candidate matches a preferred airline/hotel/cuisine, `+6` if it's
+  wishlisted (sum clamped to 100). The core score stays the primary signal.
+- **Dismissed filtering** (`orchestrator.orchestrate`): dismissed labels are
+  removed from the candidate list **before** scoring, so a rejected item never
+  resurfaces.
+- **Completeness check** (`cmr_service.prefill_note`): a deterministic sentence
+  is appended to the reply confirming pre-filled values (party size from
+  `family_size`, dietary needs from `dietary_restrictions`) so the assistant
+  doesn't re-ask. Built outside the LLM.
+- **Physical goods delivery** (`/redeem` in `main.py` + `cmr_service`):
+  redemptions detected as physical (SHOPPING category or product keywords) need
+  a delivery address. The flow uses an inline address (saved for next time) or
+  the saved default; if neither exists it returns `status="address_required"`
+  with a conversational `address_prompt` instead of booking.
+
+## CMR endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET`  | `/cmr/{user_id}` | Full profile: user + preferences + addresses + wishlist + dismissed |
+| `POST` | `/cmr/address`   | Save a delivery address (`make_default` optional) |
+| `POST` | `/cmr/wishlist`  | Add a benefit to the wishlist (by `label`, or resolved from `session_id`+`candidate_id`) |
+| `POST` | `/cmr/dismiss`   | Dismiss a benefit (same resolution options) |
+
+`/redeem` gains an optional `delivery_address` and a new `address_required`
+response status (+ `address_prompt`, `delivery_address`).
+
+## CMR demo data (seed in `0011`, replayable via `reset_demo.sql`)
+
+- **Riya** — city Mumbai, `family_size` 1, `preferred_airlines` `["IndiGo"]`,
+  Home address (Mumbai), wishlist `Manali Weekend Stay`, dismissed
+  `BookMyShow Voucher` (so it never reappears for her).
+- **Samyak** — city Bengaluru, `family_size` 2, `preferred_cuisines`
+  `["North Indian","Italian"]`, Home address (Bengaluru), wishlist
+  `Goa Marriott Luxury Stay`.
+
+Wishlist/dismissed seeds use real catalogue `benefit_name`s so the boost/filter
+actually engage when those candidates surface at runtime.
+
+## Run
 
 ```powershell
-# Terminal 1 — Mock Bank MCP server
 cd backend
-.venv\Scripts\python -m mcp_server
-
-# Terminal 2 — CredArt FastAPI backend
-cd backend
-.venv\Scripts\python -m uvicorn api.main:app --port 8001 --reload
+.venv\Scripts\python -m uvicorn api.main:app --port 8001 --reload   # backend
+.venv\Scripts\python -m mcp_server                                   # bank MCP (port 8000)
 ```
 
-## Testing
+Apply the CMR migration against the DB the same way as the others (the SQL in
+`db/prisma/migrations/0011_cmr/migration.sql`).
 
-```powershell
-cd backend
-.venv\Scripts\python smoke_test.py        # Layer 1 services (direct DB, no servers needed)
-.venv\Scripts\python client_test.py       # MCP handshake + tool calls (requires MCP server)
-.venv\Scripts\python redeem_demo.py       # Full E2E: chat → /redeem (requires both servers)
-.venv\Scripts\python test_sms_parser.py   # SMS parser unit tests (standalone)
-.venv\Scripts\python sms_demo.py          # SMS ingestion demo
-```
+## ⚠️ Known pre-existing breakage (NOT introduced by CMR)
 
-### Manual recommendation / conversation testers
+The branch this was built on (`main` @ `89084e4`, the "combine OTP-flow executor
+with Redis lock" merge) was committed mid-merge:
 
-```powershell
-cd backend
-# One-shot: force-complete the intent and print the ranked candidates (no
-# follow-up questions, no chat-LLM dependency — pure ranking inspection).
-.venv\Scripts\python manual_test.py riya   "what can I do with my points"
-.venv\Scripts\python manual_test.py samyak "what can I do with my points"
+- `backend/services/redemption/executor.py` contains unresolved Git conflict
+  markers (`<<<<<<<` / `=======` / `>>>>>>>`) — it won't parse as Python.
+- `registry.py` / `executor.py` / `main.py` import four modules that don't exist
+  in the repo: `assisted_checkout_provider`, `bank_internal_provider`,
+  `voucher_provider`, `booking_session_service`.
 
-# Interactive: real /chat with multi-turn follow-up questions (needs both
-# servers + the chat LLM up). 'riya' or 'samyak'; type 'new' to reset, 'quit' to exit.
-.venv\Scripts\python manual_chat.py riya
-```
-
-`manual_test.py` bypasses the conversation to isolate recommendation quality;
-`manual_chat.py` exercises the full intent → follow-up → recommendation flow.
-Demo headline: run the same open-ended query for both users and watch the lists
-diverge (Riya leans travel, Samyak leans dining) purely from preference weights.
-
-## Catalog & Embeddings
-
-```powershell
-cd backend
-.venv\Scripts\python seed_catalogue.py             # Load hdfc_catalogue.json into DB (idempotent)
-.venv\Scripts\python ingest_embeddings.py          # Sync benefit embeddings (Gemini 768-dim)
-.venv\Scripts\python ingest_embeddings.py --force  # Re-embed all regardless of content_hash
-```
-
-## Reset Demo Data
-
-Two SQL seeds, both idempotent. `seed_demo_portfolio.sql` establishes the
-two-user demo state (cards, preference weights, redemption counters);
-`reset_demo.sql` resets Riya's mutable ledger + expiry choreography before a run.
-
-```powershell
-cd backend
-# Establish/restore the full two-user portfolio (run after any live redemptions)
-.venv\Scripts\python -c "import asyncio; from pathlib import Path; from services import db; asyncio.run(db.execute(Path('../db/seed_demo_portfolio.sql').read_text(encoding='utf-8')))"
-# Reset Riya's ledger, demo_points, and expiry hooks
-.venv\Scripts\python -c "import asyncio; from pathlib import Path; from services import db; asyncio.run(db.execute(Path('../db/reset_demo.sql').read_text(encoding='utf-8')))"
-```
-
-### Demo users
-
-Both users hold all 3 HDFC cards, so the **only** driver of different
-recommendations is their preference profile — the core personalization demo.
-
-| User | `user_id` | Profile |
-|---|---|---|
-| **Riya Sharma** | `…0002` | travel-leaning (travel_weight 0.50); Regalia primary, expiry hooks |
-| **Samyak Rao** | `…0001` | dining-leaning (dining_weight 0.50) |
-
-Confirmed redemptions drift these weights (see Dynamic Lifestyle Weighting);
-re-run `seed_demo_portfolio.sql` to wash that back to baseline.
-
-## Environment Variables
-
-`backend/.env` and `db/.env` — required:
-
-| Variable | Purpose |
-|---|---|
-| `DIRECT_URL` | Supabase Postgres session mode (port 5432, asyncpg-friendly — use this, not DATABASE_URL) |
-| `DATABASE_URL` | Supabase pooler (Prisma migrations only) |
-| `GROQ_API_KEY` | llama-3.3-70b-versatile (primary LLM) |
-| `GEMINI_API_KEY` | Embeddings (768-dim) + Gemini flash fallback |
-
-Optional:
-
-| Variable | Purpose |
-|---|---|
-| `REDIS_URL` | Session persistence (auto-upgrades from in-memory when set) |
-| `BANK_MCP_URL` | Override MCP endpoint (default: `http://127.0.0.1:8000/sse`) |
-| `DUFFEL_API_KEY` | Live Duffel flight booking (test-mode sandbox) |
-| `TANGO_API_KEY` | Voucher provider for shopping/dining/entertainment |
-| `PROVIDER_HOTEL_*_BOOK_URL` | Hotel partner booking endpoints |
-
-## Architecture
-
-### Two-Server Split
-
-**Mock Bank MCP** (`backend/mcp_server.py`, port 8000)
-- Strict card-level boundary: card metadata, benefits, transfer partners, T&C, embeddings
-- 7 tools wrapped in standard envelope `{scope, content_hash, data}`
-- **Never exposes user tables** (user_cards, points_ledger, preferences)
-
-**CredArt Backend** (`backend/api/`, port 8001)
-- FastAPI with 4 routes: `POST /chat`, `POST /redeem`, `POST /sms`, `GET /health`
-- Consumes the MCP via `services/bank_mcp_client.py` (SSE persistent client with in-process fallback)
-- Accesses user data directly from DB (`services/user_service.py`)
-
-### Chat Request Flow
-
-```
-POST /chat
-  → api/intent.py: LLM intent extraction (Groq primary, Gemini fallback, keyword heuristics last)
-      • Merge with session["partial_intent"] from earlier turns (session.merge_partial_intent):
-        `query` ACCUMULATES across turns; `kind`/fields prefer the newest non-null value
-      • llm_service.llm_check_completeness(): is this intent complete, or ask ONE more question?
-        Sets Intent.is_complete + Intent.follow_up_question. Fails OPEN (treats as complete).
-  → if NOT complete: skip candidate assembly, return follow_up_question as the reply,
-        persist session["partial_intent"]. (Self-contained kinds — greeting/check_expiry/
-        transfer — are always complete.)
-  → api/orchestrator.py: assemble candidates (only once intent is complete)
-      • User cards + points from user_service (direct DB)
-      • Card benefits from bank_mcp_client (MCP or in-process fallback)
-      • Semantic search over the ACCUMULATED query: benefit_embeddings pgvector cosine (768-dim HNSW)
-      • Preference seeding: for a generic ask (no explicit category), also pull the user's
-        dominant preference categories into the pool (within 15% of top weight, cap 2) — so
-        preferences shape the POOL, not just the ranking
-      • Transfers injected only for transfer / general / travel intents (not dining/shopping/etc.)
-      • Flight candidates via Duffel when destination present
-      • Expiry urgency candidates for cards expiring ≤30 days
-  → services/scoring_service.py: 5-dimension deterministic rank
-      • financial (0.35): ₹/pt from transfer_partners.effective_value_inr
-      • lifestyle (0.25): preference weights × semantic similarity, ±25 for the request's category
-      • redemption_prob (0.20): confirm rate from recommendation_events (cold-start prior)
-      • expiry_risk (0.10): days-to-expiry urgency
-      • flexibility (0.10): kind (transfer > perk > redemption)
-      • then collapse same-named rewards (held on >1 card) to their single best-scored instance
-  → services/redemption/registry.py: attach fulfillment providers per candidate
-  → services/llm_service.llm_rerank_reply(): LLM sees ONLY the candidate list, never DB
-  → Log recommendation_events (training signal for future scoring)
-  → Return ChatResponse with candidates + reply
-```
-
-### Conversational Intent (multi-turn)
-
-The bot gathers intent across turns before recommending. `llm_check_completeness`
-decides whether enough is known (e.g. flights want destination → date → passengers
-→ cabin; dining wants date → party size → occasion → cuisine) or asks ONE natural
-follow-up. Partial intent lives in `session["partial_intent"]`; `query` is
-accumulated so the eventual semantic search sees the full context, not the last
-one-word answer. If the chat LLM is unreachable, completeness fails open and the
-bot proceeds straight to recommendations (graceful degradation, not a bug).
-
-### Redemption Flow
-
-```
-POST /redeem
-  → Validate candidate from session["last_candidates"] (never trust client)
-  → services/redemption/executor.py:
-      • Server-side affordability re-check
-      • Dispatch to provider: DemoProvider | DuffelProvider | TangoProvider | WebsiteHotelProvider
-      • Atomic transaction: debit points → write points_ledger → mark completed
-      • On failure: rollback, mark failed with rollback_reason
-  → Update recommendation_events.user_action = 'confirmed' (feedback loop)
-  → Dynamic lifestyle weight update (feeds into next scoring turn)
-```
-
-### Dynamic Lifestyle Weighting
-
-`user_service.update_preferences_after_redemption` runs after every **confirmed**
-redemption (only on `/redeem`, not on browsing). The redeemed category's
-preference weight gains +0.05 (capped at 1.0); all others decay −0.0125 (floored
-at 0.0); `total_redemptions` increments. So a user who keeps booking travel drifts
-toward travel, which in turn reshapes their future preference-seeded
-recommendations. The drift is a real, persisted DB write — `seed_demo_portfolio.sql`
-resets weights AND counters to baseline.
-
-### Anti-Hallucination Boundary
-
-This is the core design invariant—**do not break it**:
-1. LLM receives only the pre-scored `Candidate` list from `api/schemas.py`, never raw DB data
-2. All ₹ values and point figures come from real DB rows (`effective_value_inr`, `points_cost`)
-3. `mcp_server.py` exposes card-level tools only—user tables are never reachable via MCP
-4. Redemption executor re-validates affordability server-side regardless of what the client sends
-5. LLM failures degrade gracefully to deterministic keyword heuristics + templated replies
-
-### Key Files
-
-| File | Role |
-|---|---|
-| `api/orchestrator.py` | Heart of Layer 1: completeness short-circuit, candidate assembly, preference seeding, same-name dedup, scoring integration |
-| `api/intent.py` | Intent extraction + partial-intent merge + completeness check; city-to-IATA, keyword fallback |
-| `api/session.py` | SessionStore (in-memory/Redis, 1h TTL, 40-turn cap) + `merge_partial_intent` (query accumulation) |
-| `api/schemas.py` | All Pydantic models; `Intent.is_complete` / `Intent.follow_up_question` drive the multi-turn flow |
-| `services/scoring_service.py` | 5-dim deterministic ranking, current-request category boost, `log_recommendation_events` |
-| `services/llm_service.py` | Groq/Gemini wrappers; system prompts for intent, completeness check, and rerank/reply |
-| `services/user_service.py` | User/card/preference reads + `update_preferences_after_redemption` (dynamic weighting) |
-| `services/bank_mcp_client.py` | Persistent SSE MCP client with in-process fallback for every helper |
-| `services/redemption/executor.py` | Booking transaction: afford check → provider.book() → atomic debit |
-| `services/redemption/registry.py` | Provider dispatch table (demo always available; travel/shopping/dining get live) |
-| `mcp_server.py` | FastMCP (port 8000): 7 card-level tools |
-| `db/prisma/schema.prisma` | Prisma schema (12 tables, migrations 0001–0010) |
-| `backend/catalogue/hdfc_catalogue.json` | Source of truth: 3 cards, 48 benefits across all categories (seed via `seed_catalogue.py`) |
-| `backend/catalogue/transfer_partners.json` | 10 transfer partners (airline/hotel) keyed by card |
-| `db/seed_demo_portfolio.sql` | Idempotent two-user demo state: all cards, preference weights, counters |
-| `backend/manual_test.py` / `manual_chat.py` | Manual recommendation / conversation testers |
-
-### Database Notes
-
-- Use `DIRECT_URL` (port 5432, session mode) for asyncpg — never the pgbouncer pooler URL
-- pgvector HNSW index on `benefit_embeddings` for cosine similarity (768-dim Gemini)
-- `content_hash` on `BenefitEmbedding` enables idempotent embedding sync
-- `RecommendationEvent` is the learning signal: scored candidates → confirmed/dismissed actions → feeds `redemption_prob` dimension on next request
-- `demo_points` column on `UserCard` allows safe E2E testing without touching live `current_points`
+So the FastAPI app won't import/start until that merge is resolved and those
+modules are restored. The CMR code is written to be clean and pattern-matching
+so it slots in correctly once the app is runnable again; the new/changed Python
+files all pass `py_compile`.
