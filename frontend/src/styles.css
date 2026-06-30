@@ -1,0 +1,111 @@
+/* ============================================================
+   CredArt — design tokens + motion (ported from prototype)
+   ============================================================ */
+
+:root {
+  --brand-950: #1B0A3A;
+  --brand-900: #2A0E55;
+  --brand-800: #3C166F;
+  --brand-700: #54239B;
+  --brand-600: #6A2FC4;
+  --brand-500: #8347E6;
+  --brand-400: #A175F0;
+  --brand-300: #C4A4F4;
+  --brand-200: #E0CEFA;
+  --brand-100: #EFE6FC;
+  --brand-50:  #F7F2FE;
+
+  --bg:        #F3F0FA;
+  --surface:   #FFFFFF;
+  --surface-2: #FBFAFE;
+  --ink:       #1C1330;
+  --ink-2:     #574B6E;
+  --ink-3:     #9389A8;
+  --hairline:  rgba(28,19,48,0.08);
+
+  --green: #16B981;
+  --green-bg: #E5F8F0;
+  --amber: #F2A23B;
+  --amber-bg: #FCF1E0;
+  --red:   #F0604E;
+  --red-bg: #FCE9E6;
+
+  --r-xs: 10px;
+  --r-sm: 14px;
+  --r-md: 20px;
+  --r-lg: 28px;
+  --r-xl: 34px;
+
+  --sh-sm: 0 1px 2px rgba(28,19,48,0.05), 0 2px 6px rgba(28,19,48,0.04);
+  --sh-md: 0 6px 18px rgba(56,22,111,0.08), 0 2px 6px rgba(28,19,48,0.05);
+  --sh-lg: 0 18px 40px rgba(56,22,111,0.16), 0 6px 14px rgba(28,19,48,0.07);
+  --sh-card: 0 22px 44px -12px rgba(42,14,85,0.45);
+
+  --font: "Plus Jakarta Sans", -apple-system, system-ui, sans-serif;
+  --font-num: "Space Grotesk", var(--font);
+}
+
+html, body { margin: 0; padding: 0; background: #e3ddf0; -webkit-font-smoothing: antialiased; }
+#root { min-height: 100vh; }
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+.cr-root { font-family: var(--font); color: var(--ink); height: 100%; }
+.num { font-family: var(--font-num); font-feature-settings: "tnum" 1; letter-spacing: -0.01em; }
+
+.tap { cursor: pointer; transition: transform .14s ease, box-shadow .2s ease, background .2s ease; }
+.tap:active { transform: scale(0.97); }
+
+@keyframes kobieBreathe { 0%,100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-3px) scale(1.012); } }
+@keyframes antennaGlow { 0%,100% { opacity: .55; r: 4.2; } 50% { opacity: 1; r: 5.4; } }
+@keyframes thinkDot { 0%,80%,100% { transform: translateY(0); opacity: .4; } 40% { transform: translateY(-5px); opacity: 1; } }
+@keyframes msgIn { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes chipPop { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes checkDraw { from { stroke-dashoffset: 60; } to { stroke-dashoffset: 0; } }
+@keyframes eyeBlink { 0%,90%,100% { transform: scaleY(1); } 95% { transform: scaleY(0.1); } }
+@keyframes eyeGlow { 0%,100% { opacity: 0.85; filter: drop-shadow(0 0 2px rgba(255,255,255,0.4)); } 50% { opacity: 1; filter: drop-shadow(0 0 6px rgba(255,255,255,0.9)); } }
+@keyframes crShake { 0%,100% { transform: translateX(0); } 20%,60% { transform: translateX(-6px); } 40%,80% { transform: translateX(6px); } }
+.cr-shake { animation: crShake .4s ease both; }
+.animate-msg { animation: msgIn .42s cubic-bezier(.2,.8,.2,1) both; }
+.animate-chip { animation: chipPop .34s cubic-bezier(.2,.8,.2,1) both; }
+
+.no-sb { scrollbar-width: none; }
+.no-sb::-webkit-scrollbar { display: none; }
+
+/* desktop pitch panel hides on narrow/mobile viewports */
+@media (max-width: 860px) { .cr-desktop-pitch { display: none; } }
+
+/* ---------- additional motion ported from 2.0 ---------- */
+@keyframes haloPulse {
+  0%   { transform: scale(0.7); opacity: .55; }
+  70%  { transform: scale(1.45); opacity: 0; }
+  100% { transform: scale(1.45); opacity: 0; }
+}
+@keyframes chipFloat {
+  0%,100% { transform: translateY(0); }
+  50%     { transform: translateY(-4px); }
+}
+@keyframes screenIn {
+  from { opacity: 0; transform: translateX(18px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes screenInBack {
+  from { opacity: 0; transform: translateX(-18px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes ringPop {
+  0%   { transform: scale(0); opacity: 0; }
+  60%  { transform: scale(1.08); }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes spinAround { to { transform: rotate(360deg); } }
+@keyframes stepInLine {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes antennaGlow {
+  0%,100% { opacity: .55; }
+  50%     { opacity: 1; }
+}

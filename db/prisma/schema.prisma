@@ -107,20 +107,30 @@ model TncVersion {
 }
 
 model User {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name      String   @db.VarChar(128)
-  email     String   @unique @db.VarChar(256)
-  phone     String?  @db.VarChar(16)
-  city      String?  @db.VarChar(64)
-  state     String?  @db.VarChar(64)
-  country   String   @default("India") @db.VarChar(64)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String    @db.VarChar(128)
+  email       String    @unique @db.VarChar(256)
+  phone       String?   @db.VarChar(16)
+  dateOfBirth DateTime? @map("date_of_birth") @db.Date
+  city        String?   @db.VarChar(64)
+  state       String?   @db.VarChar(64)
+  country     String    @default("India") @db.VarChar(64)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz
   userCards            UserCard[]
   preferences          Preference?
   redemptionHistory    RedemptionHistory[]
   recommendationEvents RecommendationEvent[]
   smsMessages          SmsMessage[]
+  addresses            UserAddress[]
+  wishlist             CmrWishlist[]
+  dismissed            CmrDismissed[]
+  conversations        Conversation[]
+  userMemory           UserMemory?
+  unfinishedTasks      UnfinishedTask[]
+  recommendationSessions RecommendationSession[]
+  redemptionOrders     RedemptionOrder[]
+  profileSignals       ProfileSignal[]
   @@map("users")
 }
 
@@ -132,6 +142,7 @@ model UserCard {
   expiryMonth        Int       @map("expiry_month") @db.SmallInt
   expiryYear         Int       @map("expiry_year") @db.SmallInt
   currentPoints      Int       @default(0) @map("current_points")
+  demoPoints         Int       @default(100000) @map("demo_points")
   nextExpiryPoints   Int?      @map("next_expiry_points")
   nextExpiryDate     DateTime? @map("next_expiry_date") @db.Date
   tierLevel          String    @default("standard") @map("tier_level") @db.VarChar(32)
@@ -187,9 +198,60 @@ model Preference {
   valueSensitivityThreshold  Decimal?  @map("value_sensitivity_threshold") @db.Decimal(6, 4)
   totalRedemptions           Int       @default(0) @map("total_redemptions")
   totalDismissals            Int       @default(0) @map("total_dismissals")
+  // CMR — extended taste profile (optional, safe defaults).
+  preferredAirlines          String[]  @default([]) @map("preferred_airlines")
+  preferredHotelChains       String[]  @default([]) @map("preferred_hotel_chains")
+  preferredCuisines          String[]  @default([]) @map("preferred_cuisines")
+  dietaryRestrictions        String[]  @default([]) @map("dietary_restrictions")
   updatedAt                  DateTime  @updatedAt @map("updated_at") @db.Timestamptz
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   @@map("preferences")
+}
+
+// CMR — saved delivery addresses (one or more per user, one default).
+model UserAddress {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  label        String   @default("Home") @db.VarChar(32)
+  addressLine1 String   @map("address_line1") @db.Text
+  addressLine2 String?  @map("address_line2") @db.Text
+  city         String   @db.VarChar(64)
+  state        String?  @db.VarChar(64)
+  pincode      String   @db.VarChar(10)
+  isDefault    Boolean  @default(false) @map("is_default")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  redemptionOrders RedemptionOrder[]
+  @@index([userId])
+  @@map("user_addresses")
+}
+
+// CMR — benefits the user wishlisted (interested, not yet redeemed).
+model CmrWishlist {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  label     String   @db.Text
+  cardId    String?  @map("card_id") @db.VarChar(64)
+  category  String?  @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, label])
+  @@index([userId])
+  @@map("cmr_wishlist")
+}
+
+// CMR — benefits the user dismissed (never recommend again).
+model CmrDismissed {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  label     String   @db.Text
+  cardId    String?  @map("card_id") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, label])
+  @@index([userId])
+  @@map("cmr_dismissed")
 }
 
 model RedemptionHistory {
@@ -244,6 +306,158 @@ model RecommendationEvent {
   @@index([userId])
   @@index([userAction])
   @@map("recommendation_events")
+}
+
+model Conversation {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  title       String    @db.VarChar(160)
+  status      String    @default("active") @db.VarChar(32)
+  journeyType String?   @map("journey_type") @db.VarChar(64)
+  lastMessageAt DateTime @default(now()) @map("last_message_at") @db.Timestamptz
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages    ConversationMessage[]
+  state       ConversationState?
+  unfinishedTasks UnfinishedTask[]
+  recommendationSessions RecommendationSession[]
+  redemptionOrders RedemptionOrder[]
+  @@index([userId, updatedAt(sort: Desc)])
+  @@map("conversations")
+}
+
+model ConversationMessage {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversationId String    @map("conversation_id") @db.Uuid
+  role           String    @db.VarChar(16)
+  content        String    @db.Text
+  metadata       Json?     @db.JsonB
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  @@index([conversationId, createdAt])
+  @@map("conversation_messages")
+}
+
+model ConversationState {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversationId String    @unique @map("conversation_id") @db.Uuid
+  journeyType    String?   @map("journey_type") @db.VarChar(64)
+  responseType   String?   @map("response_type") @db.VarChar(32)
+  knownSlots     Json      @default("{}") @db.JsonB
+  missingSlots   Json      @default("[]") @db.JsonB
+  openTask       String?   @map("open_task") @db.Text
+  recommendationState Json? @map("recommendation_state") @db.JsonB
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  @@map("conversation_states")
+}
+
+model UserMemory {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId               String    @unique @map("user_id") @db.Uuid
+  summary              String?   @db.Text
+  structuredPreferences Json     @default("{}") @map("structured_preferences") @db.JsonB
+  lifestyleTags        String[]  @default([])
+  lastActiveConversationId String? @map("last_active_conversation_id") @db.Uuid
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@map("user_memory")
+}
+
+
+model UnfinishedTask {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  conversationId String    @map("conversation_id") @db.Uuid
+  journeyType    String    @map("journey_type") @db.VarChar(64)
+  title          String    @db.VarChar(160)
+  status         String    @default("open") @db.VarChar(32)
+  details        Json      @default("{}") @db.JsonB
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  @@index([userId, status, updatedAt(sort: Desc)])
+  @@map("unfinished_tasks")
+}
+
+model RecommendationSession {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  conversationId String?   @map("conversation_id") @db.Uuid
+  journeyType    String    @map("journey_type") @db.VarChar(64)
+  status         String    @default("draft") @db.VarChar(32)
+  inputContext   Json      @default("{}") @map("input_context") @db.JsonB
+  recommendations Json     @default("[]") @db.JsonB
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  redemptionOrders RedemptionOrder[]
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("recommendation_sessions")
+}
+
+model RewardItem {
+  id              String    @id @db.VarChar(64)
+  catalogueName   String    @map("catalogue_name") @db.VarChar(64)
+  title           String    @db.VarChar(160)
+  description     String    @db.Text
+  category        String    @db.VarChar(64)
+  subcategory     String?   @db.VarChar(64)
+  brand           String?   @db.VarChar(64)
+  provider        String?   @db.VarChar(64)
+  pointsPrice     Int       @map("points_price")
+  cashPriceInr    Int?      @map("cash_price_inr")
+  pointsPlusCash  Json?     @map("points_plus_cash") @db.JsonB
+  inventoryStatus String    @default("in_stock") @map("inventory_status") @db.VarChar(32)
+  fulfillmentType String    @default("delivery") @map("fulfillment_type") @db.VarChar(32)
+  metadata        Json?     @db.JsonB
+  isActive        Boolean   @default(true) @map("is_active")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  redemptionOrders RedemptionOrder[]
+  @@index([category, isActive])
+  @@map("reward_items")
+}
+
+model RedemptionOrder {
+  id                      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                  String    @map("user_id") @db.Uuid
+  conversationId          String?   @map("conversation_id") @db.Uuid
+  recommendationSessionId String?   @map("recommendation_session_id") @db.Uuid
+  itemType                String    @map("item_type") @db.VarChar(32)
+  itemId                  String    @map("item_id") @db.VarChar(64)
+  pointsUsed              Int       @default(0) @map("points_used")
+  cashComponent           Decimal   @default(0) @map("cash_component") @db.Decimal(10, 2)
+  status                  String    @default("pending_confirmation") @db.VarChar(32)
+  deliveryAddressId       String?   @map("delivery_address_id") @db.Uuid
+  confirmationTimestamp   DateTime? @map("confirmation_timestamp") @db.Timestamptz
+  providerReference       String?   @map("provider_reference") @db.Text
+  details                 Json?     @db.JsonB
+  createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt               DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  user                    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation            Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  recommendationSession   RecommendationSession? @relation(fields: [recommendationSessionId], references: [id], onDelete: SetNull)
+  deliveryAddress         UserAddress? @relation(fields: [deliveryAddressId], references: [id], onDelete: SetNull)
+  rewardItem              RewardItem  @relation(fields: [itemId], references: [id])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("redemption_orders")
+}
+
+model ProfileSignal {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  source      String    @db.VarChar(32)
+  signalType  String    @map("signal_type") @db.VarChar(64)
+  signalKey   String    @map("signal_key") @db.VarChar(64)
+  signalValue Json      @map("signal_value") @db.JsonB
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, source, signalType])
+  @@map("profile_signals")
 }
 
 model BenefitEmbedding {

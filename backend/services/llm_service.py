@@ -31,9 +31,8 @@ Schema:
   "card_id": "<hdfc_infinia|hdfc_regalia_gold|hdfc_millennia or null>",
   "category": "<TRAVEL|DINING|ENTERTAINMENT|SHOPPING|WELLNESS or null>",
   "urgency": true/false,
-  "origin": "<3-letter IATA code of departure airport, or null>",
-  "destination": "<3-letter IATA code of the place the user wants to fly to, or null>",
-  "depart_date": "<YYYY-MM-DD if a travel date is stated or implied, else null>"
+  "journey_type": "<travel_flight|travel_hotel|product_purchase|home_setup|gift_purchase|voucher_redemption|cashback_or_statement_credit|transfer_partner_redemption|card_benefit_lookup|points_expiry_help|general_reward_advice or null>",
+  "slots": {}
 }
 
 Rules:
@@ -45,70 +44,16 @@ Rules:
 - urgency=true: user signals time pressure around expiry
 - category: infer from context (flights/hotels→TRAVEL, food→DINING, movie→ENTERTAINMENT, etc.)
 - card_id: only set if user names a specific card
-- destination: ONLY when the user wants to fly somewhere; convert the city to its main
-  IATA code (Mumbai→BOM, Delhi→DEL, Bangalore→BLR, Goa→GOI, Dubai→DXB, London→LHR,
-  Singapore→SIN, New York→JFK, Bangkok→BKK, Maldives→MLE). Else null.
-- origin: only if the user states where they fly FROM; convert to IATA. Else null.
-- depart_date: resolve relative dates (next month, next friday, in 2 weeks) to an
-  absolute YYYY-MM-DD using the current date provided below. Else null.
-"""
-
-_COMPLETENESS_SYSTEM = """You are a conversational intent-gathering assistant for CredArt, a credit card rewards concierge.
-
-Your goal is to collect ALL the important details needed to give a truly personalised recommendation. A recommendation made without key context is generic — not useful. Only surface results once you have everything that meaningfully changes what to recommend.
-
-Intent kinds that are ALWAYS complete (never ask anything):
-  greeting, check_expiry, transfer, unknown
-
-For all other intents, gather the following before marking complete.
-Check the conversation history carefully — skip any question already answered.
-
-TRAVEL — flights (destination is set, or user mentioned flying/flight/trip):
-  Gather in order of importance:
-  1. Destination — where are they flying to?
-  2. Travel date — when do they want to fly? (departure date only — do NOT ask about return date or return flights)
-  3. Number of passengers — how many people are travelling?
-  4. Cabin class — economy, business, or first class?
-
-TRAVEL — general (no explicit flight, user asking about travel benefits/hotels/lounges):
-  Always complete — show transfer partners and travel perks.
-
-DINING:
-  Gather in order of importance:
-  1. Date and time — when are they planning to dine?
-  2. Party size — how many people?
-  3. Occasion — birthday, anniversary, date night, business, casual? (ONLY mark this answered if the user explicitly stated an occasion; "Italian" is NOT an occasion)
-  4. Cuisine preference — any specific cuisine in mind? (ONLY mark this answered if the user named a cuisine like Italian, Indian, Chinese, Continental etc.; "Anniversary" is NOT a cuisine)
-
-SHOPPING:
-  Gather in order of importance:
-  1. What they want to buy — specific item or category?
-  2. Budget — how much are they looking to spend?
-  3. Brand preference — any preferred brands?
-
-ENTERTAINMENT (movies, concerts, events, shows):
-  Gather in order of importance:
-  1. Type — movie, concert, sports, theatre?
-  2. Date — when?
-  3. Number of people — how many tickets?
-
-WELLNESS (gym, spa, fitness, health):
-  Gather in order of importance:
-  1. Type of activity — gym membership, spa, yoga, physiotherapy?
-  2. Location preference — which area or city?
-
-Rules:
-  1. NEVER ask for information already present in the conversation history.
-  2. Ask ONE question per turn — the next most important missing piece from the list above.
-  3. Be friendly and natural — one short sentence, the way a human concierge would ask.
-  4. If is_complete is true, follow_up_question MUST be null.
-  5. Do NOT mark complete until all the listed fields for that category have been gathered.
-
-Return ONLY valid JSON — no markdown, no explanation:
-{
-  "is_complete": true or false,
-  "follow_up_question": "<one sentence, or null>"
-}
+- journey_type: choose the closest real-world journey. IMPORTANT:
+  * buying a physical product/gadget/merchandise with points (phone, laptop, headphones,
+    watch, appliance, phone stand, shoes, anything orderable) → product_purchase
+  * a gift for someone → gift_purchase
+  * a brand voucher/gift card (Amazon, Swiggy, Flipkart) → voucher_redemption
+  * flights/"fly"/airport → travel_flight; hotels/stay/resort → travel_hotel
+  * only use general_reward_advice when the user is vague with no concrete goal
+- slots: extract any clearly stated structured details. Common keys: origin, destination, departure_window (date or "this weekend"), passengers, cabin_class, check_in_window, nights, guests, room_type, style, budget, required_products, recipient_type, occasion, goal
+- origin/destination: city names as-is (don't convert to IATA codes)
+- departure_window: any date expression ("28th June", "this weekend", "next Friday", "2026-06-28")
 """
 
 _RERANK_SYSTEM = """You are CredArt's recommendation engine. You receive a ranked candidate list (already scored by a deterministic engine) and the user's message, and you write a concise, helpful reply.
@@ -186,20 +131,30 @@ async def _llm_call(system: str, user: str) -> tuple[str, bool]:
     raise RuntimeError("No LLM API key available (GROQ_API_KEY or GEMINI_API_KEY required)")
 
 
-async def llm_extract_intent(message: str, conversation_history: list[dict] | None = None) -> dict | None:
-    """Returns parsed intent dict or None on failure (caller falls back to heuristic)."""
-    from datetime import date
-    context = ""
-    if conversation_history:
-        lines = "\n".join(
-            f"{t['role'].upper()}: {t['content']}"
-            for t in conversation_history[-6:]
-        )
-        context = f"\n\nPrior conversation (use this to understand what the current message is answering):\n{lines}"
-    system = f"{_INTENT_SYSTEM}{context}\n\nThe current date is {date.today().isoformat()}."
+async def llm_extract_intent(
+    message: str,
+    history: list[dict] | None = None,
+    partial_intent: dict | None = None,
+) -> dict | None:
+    """Returns parsed intent dict or None on failure (caller falls back to heuristic).
+
+    When history/partial_intent provided, the message is treated as a follow-up
+    answer so the LLM can extract slot values in context (e.g. "28th June" → departure_window).
+    """
     try:
-        raw, _ = await _llm_call(system, message)
-        # Strip markdown fences if model wraps in ```json
+        if history or partial_intent:
+            context_note = ""
+            if partial_intent:
+                context_note = f"\nCurrent partial intent: {json.dumps(partial_intent)}\n"
+            if history:
+                last = history[-4:]
+                context_note += "\nRecent conversation:\n" + "\n".join(
+                    f"{m['role'].upper()}: {m['content']}" for m in last
+                )
+            user_payload = f"{context_note}\nNew user message: {message}\n\nExtract updated intent including any slot values the user just provided (e.g. city names, dates, passenger counts, cabin class, budgets). If this message is answering a previous question, set kind=unknown so the prior intent kind is preserved."
+            raw, _ = await _llm_call(_INTENT_SYSTEM, user_payload)
+        else:
+            raw, _ = await _llm_call(_INTENT_SYSTEM, message)
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         return json.loads(raw)
     except Exception as e:
@@ -217,27 +172,57 @@ async def llm_rerank_reply(
     return await _llm_call(_RERANK_SYSTEM, payload)
 
 
+_COMPLETENESS_SYSTEM = """You are a slot-completeness checker for CredArt.
+
+Given a partial intent dict, the conversation history, and (optionally) a list of
+candidate results already fetched, decide if you have enough information to give a
+useful, personalised recommendation. Return ONLY valid JSON — no markdown.
+
+Schema:
+{
+  "is_complete": true/false,
+  "follow_up_question": "<one focused question to ask the user, or null if complete>"
+}
+
+Rules:
+- travel_flight needs: origin (IATA or city), destination (IATA or city), depart_date
+- travel_hotel needs: destination, check_in date, number of nights
+- home_setup needs: room_type or required_products
+- product_purchase / gift_purchase needs: what item, budget or points range
+- transfer_partner_redemption needs: a goal (best value / specific airline). Once a
+  goal or airline preference is known, mark complete — the candidates ARE the answer.
+- general_reward_advice / card_benefit_lookup: always complete — no follow-up
+- points_expiry_help: always complete
+- Only ask ONE question per turn. Pick the single most valuable missing slot.
+- If slots dict already has the info, mark complete even if intent.kind is vague.
+- When candidates are provided: review them. If they all share an ambiguity you
+  could resolve (e.g. economy vs business, specific city vs region), ask. If they
+  are a good match, mark complete. Two or more good candidates → almost always complete.
+- NEVER ask for information the system already owns: card IDs, card/account numbers,
+  point balances, user IDs, internal references. The user only answers about their
+  own intent (trip details, preferences, budget, recipient) — never system internals.
+- Never ask a question whose answer is already in history or slots.
+- Prefer completeness. Ask at most one clarifying question after candidates exist;
+  if you already asked one, mark complete.
+"""
+
+
 async def llm_check_completeness(
     intent: dict,
-    conversation_history: list[dict],
+    history: list[dict],
+    candidates: list[dict] | None = None,
 ) -> tuple[bool, str | None]:
-    """Returns (is_complete, follow_up_question). Fallback: (True, None) on any error."""
-    payload = json.dumps({
-        "intent": intent,
-        "conversation": [
-            {"role": t["role"], "content": t["content"]}
-            for t in conversation_history[-16:]
-        ],
-    }, ensure_ascii=False)
-    try:
-        raw, _ = await _llm_call(_COMPLETENESS_SYSTEM, payload)
-        raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        data = json.loads(raw)
-        is_complete = bool(data.get("is_complete", True))
-        follow_up = data.get("follow_up_question") or None
-        if not is_complete and not follow_up:
-            return True, None  # no question to ask → treat as complete
-        return is_complete, follow_up
-    except Exception as e:
-        print(f"[llm] completeness check failed ({e}), treating as complete")
-        return True, None
+    """Returns (is_complete, follow_up_question). Never raises — caller catches."""
+    payload_obj: dict = {"intent": intent, "history": history[-6:]}
+    if candidates:
+        # Send only lightweight candidate summaries — keep prompt small.
+        payload_obj["candidates"] = [
+            {"label": c.get("label", ""), "category": c.get("category", ""),
+             "points_cost": c.get("points_cost"), "kind": c.get("kind", "")}
+            for c in candidates[:6]
+        ]
+    payload = json.dumps(payload_obj, default=str)
+    raw, _ = await _llm_call(_COMPLETENESS_SYSTEM, payload)
+    raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    parsed = json.loads(raw)
+    return bool(parsed.get("is_complete", True)), parsed.get("follow_up_question")
