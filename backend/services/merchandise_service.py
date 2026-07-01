@@ -10,6 +10,10 @@ Data source seam:
     RAPIDAPI_AMAZON_KEY), real Amazon listings can be wired in here.
   - Otherwise we call a live open product API (dummyjson) so the end-to-end flow is
     real today; swapping in Amazon is a drop-in once credentials exist.
+
+Fulfillment (converting points into an actual voucher) is a separate concern,
+handled by services/redemption/tango_provider.py (TANGO_API_USER/TANGO_API_PASS) —
+this module only searches/prices products, it doesn't issue vouchers.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ import os
 import uuid
 
 from api.schemas import Candidate
+from .card_selector import pick_card
 
 # ₹ delivered per point when converted to a brand voucher (SmartBuy-style).
 CARD_VOUCHER_POINT_VALUE = {
@@ -32,12 +37,6 @@ _USD_INR = 84.0
 _AMAZON_KEY = (
     os.getenv("RAINFOREST_API_KEY") or os.getenv("SERPAPI_KEY") or os.getenv("RAPIDAPI_AMAZON_KEY") or ""
 )
-
-
-def _best_voucher_card(cards: list[dict]) -> dict | None:
-    if not cards:
-        return None
-    return max(cards, key=lambda c: CARD_VOUCHER_POINT_VALUE.get(c["card_id"], _DEFAULT_POINT_VALUE))
 
 
 async def _search_products(query: str, limit: int) -> list[dict]:
@@ -71,17 +70,20 @@ async def _search_products(query: str, limit: int) -> list[dict]:
     return out
 
 
-async def search_merchandise_candidates(query: str, cards: list[dict], limit: int = 4) -> list[Candidate]:
-    """Real products as redeemable Candidates (points → Amazon voucher → order). [] on miss."""
+async def search_merchandise_candidates(
+    query: str, cards: list[dict], limit: int = 4, active_card_id: str | None = None
+) -> tuple[list[Candidate], dict | None]:
+    """Real products as redeemable Candidates (points → Amazon voucher → order).
+    ([], None) on miss."""
     query = (query or "").strip()
     if not query:
-        return []
+        return [], None
     products = await _search_products(query, limit)
     if not products:
-        return []
-    card = _best_voucher_card(cards)
+        return [], None
+    card, suggestion = pick_card(cards, CARD_VOUCHER_POINT_VALUE, _DEFAULT_POINT_VALUE, active_card_id)
     if card is None:
-        return []
+        return [], None
     point_value = CARD_VOUCHER_POINT_VALUE.get(card["card_id"], _DEFAULT_POINT_VALUE)
     balance = card.get("current_points") or 0
     voucher_currency = card.get("currency_name") or "points"
@@ -112,4 +114,4 @@ async def search_merchandise_candidates(query: str, cards: list[dict], limit: in
             metadata={"brand": p.get("brand"), "thumbnail": p.get("thumbnail"),
                       "description": p.get("description"), "amazon_live": bool(_AMAZON_KEY)},
         ))
-    return candidates
+    return candidates, suggestion

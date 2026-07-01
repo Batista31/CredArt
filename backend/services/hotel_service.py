@@ -14,6 +14,7 @@ import re
 import uuid
 
 from api.schemas import Candidate
+from .card_selector import pick_card
 
 # Partner storefront hotels + their published nightly rate (₹). Matches the two
 # providers registered in redemption/website_hotel_provider.py.
@@ -54,21 +55,17 @@ def _guests(slots: dict) -> int:
     return 2
 
 
-def _best_card(cards: list[dict]) -> dict | None:
-    if not cards:
-        return None
-    return max(cards, key=lambda c: CARD_HOTEL_POINT_VALUE.get(c["card_id"], _DEFAULT_POINT_VALUE))
-
-
 def _provider_available(provider_id: str) -> bool:
     return bool(os.getenv(f"PROVIDER_{provider_id.upper()}_BOOK_URL", ""))
 
 
-def search_hotel_candidates(slots: dict, cards: list[dict]) -> list[Candidate]:
-    """Storefront hotels as bookable Candidates priced in points. [] if no card."""
-    card = _best_card(cards)
+def search_hotel_candidates(
+    slots: dict, cards: list[dict], active_card_id: str | None = None
+) -> tuple[list[Candidate], dict | None]:
+    """Storefront hotels as bookable Candidates priced in points. ([], None) if no card."""
+    card, suggestion = pick_card(cards, CARD_HOTEL_POINT_VALUE, _DEFAULT_POINT_VALUE, active_card_id)
     if card is None:
-        return []
+        return [], None
     point_value = CARD_HOTEL_POINT_VALUE.get(card["card_id"], _DEFAULT_POINT_VALUE)
     balance = card.get("current_points") or 0
     nights = _nights(slots)
@@ -102,4 +99,4 @@ def search_hotel_candidates(slots: dict, cards: list[dict]) -> list[Candidate]:
             ],
             metadata={"hotel": h["name"], "nights": nights, "guests": guests, "rate_inr": h["rate"]},
         ))
-    return out
+    return out, suggestion

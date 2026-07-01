@@ -6,7 +6,6 @@ from typing import Any
 from services import (
     conversation_service,
     memory_service,
-    personalization_service,
     recommendation_session_service,
     reward_catalogue_service,
     scoring_service,
@@ -129,8 +128,44 @@ _NEVER_FOLLOWUP_JOURNEYS = {
     "cashback_or_statement_credit",
 }
 
+# Card-name aliases the user can say to explicitly switch which card recs use.
+_CARD_SWITCH_ALIASES = {
+    "infinia": "hdfc_infinia",
+    "regalia": "hdfc_regalia_gold",
+    "millennia": "hdfc_millennia",
+}
+
+
+def _detect_card_switch(message: str, cards: list[dict]) -> str | None:
+    """If the user explicitly named a held card in this message, return its card_id."""
+    text = (message or "").lower()
+    held = {c["card_id"] for c in cards}
+    for alias, card_id in _CARD_SWITCH_ALIASES.items():
+        if alias in text and card_id in held:
+            return card_id
+    return None
+
+
+async def _orchestrate_scoped(intent: Any, user: dict, cards: list[dict], active_card_id: str | None):
+    """orchestrate(), scoped to the opened card, with a same-consistency fallback.
+
+    Tries the active card only first (so candidates and the LLM reply agree on which
+    card is being discussed). If that card genuinely has nothing relevant, retries
+    across all held cards rather than showing a blank/generic answer, and appends
+    a one-line note so the user knows why a different card showed up.
+    """
+    scoped_cards = _orchestrate_card_scope(cards, active_card_id, intent.card_id)
+    candidates, trace, meta = await orchestrate(intent, user, scoped_cards)
+    if not candidates and scoped_cards is not cards:
+        candidates, trace, meta = await orchestrate(intent, user, cards)
+        if candidates:
+            active_name = next((c["card_name"] for c in cards if c["card_id"] == active_card_id), "that card")
+            meta = {**meta, "reply": meta["reply"] + f" (Nothing matched on your {active_name}, so I checked your other cards too.)"}
+    return candidates, trace, meta
+
 
 async def _llm_postcandidate_check(
+    journey_type: str,
     intent: Any,
     history: list[dict],
     candidates: list[dict],
@@ -141,8 +176,7 @@ async def _llm_postcandidate_check(
     Returns (is_complete, follow_up_question). Defaults to (True, None) on any error so
     the loop never blocks on LLM failure — we fall through to showing recommendations.
     """
-    jt = getattr(intent, "journey_type", None) or ""
-    if jt in _NEVER_FOLLOWUP_JOURNEYS or not candidates:
+    if journey_type in _NEVER_FOLLOWUP_JOURNEYS or not candidates:
         return True, None
     try:
         from services.llm_service import llm_check_completeness
@@ -164,12 +198,47 @@ async def _llm_postcandidate_check(
         return True, None
 
 
-async def generate_concierge_response(user_id: str, message: str, conversation_id: str | None = None) -> dict:
+def _orchestrate_card_scope(cards: list[dict], active_card_id: str | None, requested_card_id: str | None) -> list[dict]:
+    """Restrict the cards handed to orchestrate() to the opened concierge card.
+
+    orchestrate() reranks + writes its reply from whichever cards it's given, so this
+    must happen BEFORE the call (not filtered after) or the reply text and the shown
+    candidates would talk about different cards. Skipped when the user explicitly asked
+    about a different card by name (requested_card_id) — that's an intentional lookup,
+    not a case to lock down.
+    """
+    if not active_card_id or requested_card_id:
+        return cards
+    restricted = [c for c in cards if c["card_id"] == active_card_id]
+    return restricted or cards
+
+
+_CARD_ID_TO_ALIAS = {v: k for k, v in _CARD_SWITCH_ALIASES.items()}
+
+
+def _card_switch_note(suggestion: dict | None, known_slots: dict) -> str:
+    """One-time note offering a better-value card, or "" if none/already asked.
+
+    Mutates known_slots to remember we've asked, so we don't re-nag every turn —
+    the user can say "use <card>" any time to switch (handled by _detect_card_switch).
+    """
+    if not suggestion or known_slots.get("card_switch_prompted"):
+        return ""
+    known_slots["card_switch_prompted"] = True
+    alias = _CARD_ID_TO_ALIAS.get(suggestion["suggested_card_id"], suggestion["suggested_card_name"].lower())
+    return (
+        f" Your {suggestion['suggested_card_name']} would get better value here — "
+        f'say "use {alias}" to switch, or I\'ll keep using your {suggestion["current_card_name"]}.'
+    )
+
+
+async def generate_concierge_response(
+    user_id: str, message: str, conversation_id: str | None = None, active_card_id: str | None = None
+) -> dict:
     user = await user_service.get_user(user_id)
     if user is None:
         raise ValueError("unknown user_id")
 
-    memory = await personalization_service.get_user_memory(user_id)
     conversation = None
     if conversation_id:
         conversation = await conversation_service.get_conversation(user_id, conversation_id)
@@ -187,26 +256,44 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
     rec_state = existing_state.get("recommendation_state") or {}
     partial_intent_dict = rec_state.get("partial_intent") if isinstance(rec_state, dict) else None
     intent = await extract_intent(message, partial_intent=partial_intent_dict, conversation_history=conv_history_dicts)
-    # If previous turn was asking for slot fills, keep the established journey_type
-    # so follow-up answers ("Mumbai, 2 people") don't re-classify the intent.
+    # A concrete new classification always wins — it means the LLM has real signal
+    # (e.g. an answer like "Bangalore to Mumbai, 3 people" resolves cleanly to
+    # travel_flight). Only fall back to the previously established journey_type when
+    # this turn's extraction genuinely didn't produce one (a bare slot-fill reply).
     prior_response_type = existing_state.get("response_type")
-    if prior_response_type == "follow_up_question" and existing_state.get("journey_type"):
+    if intent.journey_type:
+        journey_type = intent.journey_type
+    elif prior_response_type == "follow_up_question" and existing_state.get("journey_type"):
         journey_type = existing_state["journey_type"]
     else:
-        journey_type = intent.journey_type or existing_state.get("journey_type") or "general_reward_advice"
+        journey_type = existing_state.get("journey_type") or "general_reward_advice"
+    # "I want to travel" etc: the LLM correctly can't tell flight vs hotel yet, so
+    # journey_type comes back null and we'd otherwise default to general_reward_advice —
+    # which skips the context-gathering planner entirely, so we'd never ask
+    # destination/dates. Default a fresh, vague TRAVEL-category ask to travel_flight so
+    # the planner engages; it naturally upgrades to travel_hotel next turn once the
+    # user's answer makes that clear (handled by the branch above).
+    if (
+        not intent.journey_type
+        and journey_type == "general_reward_advice"
+        and intent.category == "TRAVEL"
+        and intent.kind not in ("greeting", "check_expiry", "unknown")
+    ):
+        journey_type = "travel_flight"
     known_slots = _merge_slots(existing_state.get("known_slots") or {}, intent.slots)
-    # Only pull in memory preferences RELEVANT to this journey, so travel slots from a
-    # past session don't pollute (e.g.) a voucher conversation.
-    _reqs = _journey_requirements(journey_type)
-    _allowed = set(_reqs["required"]) | set(_reqs["optional"])
-    _mem_prefs = memory.get("structured_preferences") or {}
-    if isinstance(_mem_prefs, str):
-        try:
-            _mem_prefs = json.loads(_mem_prefs)
-        except json.JSONDecodeError:
-            _mem_prefs = {}
-    _scoped_mem = {k: v for k, v in _mem_prefs.items() if k in _allowed}
-    known_slots = _merge_slots(_scoped_mem, known_slots)
+    # NOTE: deliberately NOT merging in `memory.structured_preferences` here.
+    # remember_conversation() persists each conversation's raw known_slots verbatim —
+    # literal one-off answers ("no just give me any"), not curated preferences — so
+    # every key in it is per-conversation noise, not a safe cross-session default.
+    # Genuinely durable preferences (preferred_airlines, hotel chains, cuisines,
+    # family_size) are sourced correctly elsewhere via cmr_service/user_service.
+    cards = await user_service.get_user_cards(user_id)
+    # Explicit card switch ("use regalia", "switch to infinia") overrides the opened
+    # concierge card for the rest of this conversation.
+    _switch_to = _detect_card_switch(message, cards)
+    if _switch_to:
+        known_slots["preferred_card_id"] = _switch_to
+    effective_card_id = known_slots.get("preferred_card_id") or active_card_id
     # Safety net: if the prior turn asked for slots and the LLM extracted nothing for any
     # of them, assign the user's reply to the first still-missing asked slot so the
     # follow-up loop always makes progress instead of re-asking the same question.
@@ -233,7 +320,6 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
                     known_slots[field] = iata
     missing_slots = _missing_slots(journey_type, known_slots)
 
-    cards = await user_service.get_user_cards(user_id)
     recommendations: list[dict] = []
     response_type = "general_answer"
     assistant_message = ""
@@ -255,10 +341,12 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
     confirmation_recap = None
     if use_planner:
         plan = await query_generator.next_context_question(
-            journey_type, known_slots, conv_history_dicts, intent.query or message)
+            journey_type, known_slots, conv_history_dicts, intent.query or message,
+            questions_asked=known_slots.get("_planner_questions_asked", 0))
 
     if use_planner and plan and not plan.get("ready") and plan.get("question"):
         # Still gathering context — ask the planner's next question.
+        known_slots["_planner_questions_asked"] = known_slots.get("_planner_questions_asked", 0) + 1
         response_type = "follow_up_question"
         assistant_message = plan["question"]
         missing_slots = [plan.get("slot") or "detail"]
@@ -285,7 +373,8 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
                 search_term = " ".join(str(part) for part in search_term)
             # Real merchandise via the credits→Amazon-voucher path.
             from services import merchandise_service
-            merch_cands = await merchandise_service.search_merchandise_candidates(str(search_term), cards)
+            merch_cands, card_suggestion = await merchandise_service.search_merchandise_candidates(
+                str(search_term), cards, active_card_id=effective_card_id)
             if merch_cands:
                 candidates = merch_cands
                 recommendations = [c.model_dump() for c in merch_cands]
@@ -294,12 +383,13 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
                 assistant_message = (confirmation_recap + " " if confirmation_recap else "") + (
                     f"Your {top.card_name} points convert to an Amazon voucher, and I found real matches for “{search_term}”. "
                     f"My pick: {top.label} ({top.best_use_case}). Tap to convert your points and order it.")
+                assistant_message += _card_switch_note(card_suggestion, known_slots)
                 next_actions = ["review_recommendations", "redeem_best_option"]
                 requires_confirmation = True
             else:
                 # No product match → fall back to the bank catalogue so we still surface
                 # something real (vouchers etc.) rather than an empty list.
-                legacy_candidates, trace, meta = await orchestrate(intent, user, cards)
+                legacy_candidates, trace, meta = await _orchestrate_scoped(intent, user, cards, effective_card_id)
                 candidates = legacy_candidates
                 tool_trace = [t.model_dump() for t in trace]
                 recommendations = [c.model_dump() for c in legacy_candidates]
@@ -308,14 +398,16 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
                 next_actions = ["compare_options", "redeem_best_option"] if legacy_candidates else ["clarify_goal"]
         else:
             # Real flight options (Duffel) / storefront hotel options when bookable.
-            flight_cands = []
+            flight_cands, hotel_cands = [], []
+            card_suggestion = None
             if journey_type == "travel_flight":
                 from services import flight_service
-                flight_cands = await flight_service.search_flight_candidates(known_slots, cards)
-            hotel_cands = []
+                flight_cands, card_suggestion = await flight_service.search_flight_candidates(
+                    known_slots, cards, active_card_id=effective_card_id)
             if not flight_cands and journey_type == "travel_hotel":
                 from services import hotel_service
-                hotel_cands = hotel_service.search_hotel_candidates(known_slots, cards)
+                hotel_cands, card_suggestion = hotel_service.search_hotel_candidates(
+                    known_slots, cards, active_card_id=effective_card_id)
             if flight_cands:
                 candidates = flight_cands
                 recommendations = [c.model_dump() for c in flight_cands]
@@ -324,6 +416,7 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
                 assistant_message = (confirmation_recap + " " if confirmation_recap else "") + (
                     f"Here {'is' if n == 1 else 'are'} {n} live flight option{'' if n == 1 else 's'} I can book with your points — "
                     "fares are pulled in real time from our flight partner and priced into points at your card's SmartBuy rate.")
+                assistant_message += _card_switch_note(card_suggestion, known_slots)
                 next_actions = ["compare_options", "redeem_best_option"]
                 requires_confirmation = True
             elif hotel_cands:
@@ -333,17 +426,18 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
                 assistant_message = (confirmation_recap + " " if confirmation_recap else "") + (
                     "Here are stays I can book with your points through our hotel partners — "
                     "rates are the partners' published nightly price, converted to points at your card's rate.")
+                assistant_message += _card_switch_note(card_suggestion, known_slots)
                 next_actions = ["compare_options", "redeem_best_option"]
                 requires_confirmation = True
             else:
-                legacy_candidates, trace, meta = await orchestrate(intent, user, cards)
+                legacy_candidates, trace, meta = await _orchestrate_scoped(intent, user, cards, effective_card_id)
                 candidates = legacy_candidates
                 tool_trace = [t.model_dump() for t in trace]
                 recommendations = [c.model_dump() for c in legacy_candidates]
                 if not use_planner:
                     # Non-planned journeys keep the original post-candidate LLM follow-up loop.
                     is_complete, llm_followup = await _llm_postcandidate_check(
-                        intent, conv_history_dicts, recommendations, known_slots=known_slots)
+                        journey_type, intent, conv_history_dicts, recommendations, known_slots=known_slots)
                     if not is_complete and llm_followup:
                         response_type = "follow_up_question"
                         assistant_message = llm_followup

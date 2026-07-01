@@ -119,7 +119,7 @@ function OptionCard({ cand, mode, onRedeem, wishlisted, dismissed, onWishlist, o
   );
 }
 
-export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, dismissedLabels, onWishlist, onDismiss }) {
+export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, dismissedLabels, onWishlist, onDismiss, resumeConversationId }) {
   const cardName = card?.card_name || "Concierge";
   const isMillennia = card?.card_id === "hdfc_millennia";
   const headerPts = card ? card.current_points : (user?.cards || []).reduce?.((a, c) => a + (c.current_points || 0), 0);
@@ -135,7 +135,7 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
   const [busy, setBusy] = React.useState(false);
   const [input, setInput] = React.useState("");
   const [sessionId, setSessionId] = React.useState(null);
-  const [conversationId, setConversationId] = React.useState(null);
+  const [conversationId, setConversationId] = React.useState(resumeConversationId || null);
   const [err, setErr] = React.useState(null);
   const scroller = React.useRef(null);
   const started = React.useRef(false);
@@ -143,6 +143,17 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
   React.useEffect(() => {
     if (started.current) return;
     started.current = true;
+    if (resumeConversationId && user?.user_id) {
+      api.conversation(resumeConversationId, user.user_id).then((d) => {
+        const past = (d.messages || []).map((m) => ({
+          id: nid(), who: m.role === "assistant" ? "bot" : "user", text: m.content, candidates: [],
+        }));
+        setMessages(past.length ? past : [{ id: nid(), who: "bot", text: "Picking up where you left off — what next?", intro: true }]);
+      }).catch(() => {
+        setMessages([{ id: nid(), who: "bot", text: "Couldn't load that conversation — starting fresh.", intro: true }]);
+      });
+      return;
+    }
     setMessages([{ id: nid(), who: "bot", text: `Hi ${(user?.name || "there").split(" ")[0]} — I'm CredArt, your ${cardName} concierge. What would you like to do with your points?`, intro: true }]);
   }, []);
 
@@ -157,7 +168,7 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
     pushMsg({ who: "user", text });
     setBusy(true); setErr(null);
     try {
-      const r = await api.chat(text, sessionId, conversationId);
+      const r = await api.chat(text, sessionId, conversationId, undefined, card?.card_id);
       if (r.session_id) setSessionId(r.session_id);
       if (r.conversation_id) setConversationId(r.conversation_id);
       const showCandidates = r.response_type !== "follow_up_question";

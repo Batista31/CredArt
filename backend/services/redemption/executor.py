@@ -234,6 +234,7 @@ async def _finalize(txn_id, user_id, candidate, provider, traveler, mode, row) -
             "currency": provider.currency, "points_used": cost,
             "balance_after": int(new_balance), "steps": result.steps,
             "rollback_reason": None, "booking_session_id": None,
+            "ticket": (result.raw or {}).get("ticket"),
         }
     finally:
         if lock_client is not None:

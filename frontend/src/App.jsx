@@ -4,6 +4,7 @@ import { IOSDevice } from "./components/IOSDevice.jsx";
 import { Dashboard } from "./components/Dashboard.jsx";
 import { Concierge } from "./components/Concierge.jsx";
 import { Confirm } from "./components/Confirm.jsx";
+import { ChatHistory } from "./components/ChatHistory.jsx";
 import { BankBadge, ModeBadge } from "./components/mode.jsx";
 
 const fmt = (n) => (n == null ? "0" : Number(n).toLocaleString());
@@ -81,6 +82,7 @@ export default function App() {
   const [wishlistLabels, setWishlistLabels] = React.useState(new Set());
   const [dismissedLabels, setDismissedLabels] = React.useState(new Set());
   const [chatCard, setChatCard] = React.useState(null);
+  const [resumeConvoId, setResumeConvoId] = React.useState(null);
   const [booking, setBooking] = React.useState(null);
   const [showSettings, setShowSettings] = React.useState(false);
   const [tncCard, setTncCard] = React.useState(null);
@@ -101,7 +103,16 @@ export default function App() {
   }
 
   const go = (s, d = "fwd") => { setDir(d); setScreen(s); };
-  const openChat = (card) => { setChatCard(card); go("chat"); };
+  const openChat = (card) => { setChatCard(card); setResumeConvoId(null); go("chat"); };
+  const openHistory = () => go("history");
+  const openConversation = (convo) => {
+    // History doesn't record which card a conversation was scoped to, so resume
+    // without forcing one — the backend already knows the card from known_slots
+    // (preferred_card_id) if the user switched mid-conversation.
+    setChatCard(null);
+    setResumeConvoId(convo.id);
+    go("chat");
+  };
   const onRedeem = (candidate, option, sessionId) => { setBooking({ candidate, option, sessionId }); go("confirm"); };
 
   async function handleWishlist(cand) {
@@ -113,7 +124,7 @@ export default function App() {
 
   const totalPts = cards.reduce((a, c) => a + (c.current_points || 0), 0);
   const demoPts = cards.reduce((a, c) => a + (c.demo_points || 0), 0);
-  const screenKey = screen + (booking ? "1" : "0") + (chatCard ? chatCard.user_card_id : "");
+  const screenKey = screen + (booking ? "1" : "0") + (chatCard ? chatCard.user_card_id : "") + (resumeConvoId || "");
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
@@ -137,11 +148,16 @@ export default function App() {
         <div key={screenKey} style={{ height: "100%", animation: `${dir === "fwd" ? "screenIn" : "screenInBack"} .34s cubic-bezier(.2,.8,.2,1)` }}>
           {screen === "dashboard" && (
             <Dashboard user={user} cards={cards} mode={mode}
-              onOpenChat={openChat} onOpenSettings={() => setShowSettings(true)} onOpenTnc={setTncCard} />
+              onOpenChat={openChat} onOpenSettings={() => setShowSettings(true)} onOpenTnc={setTncCard}
+              onOpenHistory={openHistory} />
+          )}
+          {screen === "history" && (
+            <ChatHistory user={user} onBack={() => go("dashboard", "back")} onOpenConversation={openConversation} />
           )}
           {screen === "chat" && (
-            <Concierge user={user} card={chatCard} mode={mode}
-              onBack={() => go("dashboard", "back")} onRedeem={onRedeem}
+            <Concierge user={user} card={chatCard} mode={mode} resumeConversationId={resumeConvoId}
+              onBack={() => { setResumeConvoId(null); go(resumeConvoId ? "history" : "dashboard", "back"); }}
+              onRedeem={onRedeem}
               wishlistLabels={wishlistLabels} dismissedLabels={dismissedLabels}
               onWishlist={handleWishlist} onDismiss={handleDismiss} />
           )}

@@ -17,6 +17,8 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_API_KEY2 = os.getenv("GROQ_API_KEY2", "")
+GROQ_API_KEY3 = os.getenv("GROQ_API_KEY3", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
@@ -94,9 +96,9 @@ def _candidates_to_json(candidates: list[Any], user_name: str, user_message: str
     return json.dumps(data, ensure_ascii=False)
 
 
-async def _groq_chat(system: str, user: str) -> str:
+async def _groq_chat(system: str, user: str, api_key: str = GROQ_API_KEY) -> str:
     from groq import AsyncGroq
-    client = AsyncGroq(api_key=GROQ_API_KEY)
+    client = AsyncGroq(api_key=api_key)
     resp = await client.chat.completions.create(
         model=GROQ_MODEL,
         messages=[
@@ -119,16 +121,20 @@ async def _gemini_chat(system: str, user: str) -> str:
     return resp.text.strip()
 
 
+_GROQ_KEYS = [k for k in (GROQ_API_KEY, GROQ_API_KEY2, GROQ_API_KEY3) if k]
+
+
 async def _llm_call(system: str, user: str) -> tuple[str, bool]:
-    """Returns (text, groq_used). Falls back to Gemini on Groq failure."""
-    if GROQ_API_KEY:
+    """Returns (text, groq_used). Tries each configured Groq key in order, then Gemini."""
+    for i, key in enumerate(_GROQ_KEYS, start=1):
         try:
-            return await _groq_chat(system, user), True
+            return await _groq_chat(system, user, key), True
         except Exception as e:
-            print(f"[llm] Groq failed ({e}), falling back to Gemini")
+            nxt = "next Groq key" if i < len(_GROQ_KEYS) else "Gemini"
+            print(f"[llm] Groq (key{i}) failed ({e}), trying {nxt}")
     if GEMINI_API_KEY:
         return await _gemini_chat(system, user), False
-    raise RuntimeError("No LLM API key available (GROQ_API_KEY or GEMINI_API_KEY required)")
+    raise RuntimeError("No LLM API key available (GROQ_API_KEY[2/3] or GEMINI_API_KEY required)")
 
 
 async def llm_extract_intent(

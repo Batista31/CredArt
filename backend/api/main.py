@@ -93,7 +93,7 @@ async def chat(req: ChatRequest):
         raise HTTPException(status_code=404, detail="unknown user_id")
 
     concierge = await generate_concierge_response(
-        req.user_id, req.message, conversation_id=req.conversation_id)
+        req.user_id, req.message, conversation_id=req.conversation_id, active_card_id=req.card_id)
 
     session = await store.load(req.session_id)
     await store.append_turn(session, "user", req.message)

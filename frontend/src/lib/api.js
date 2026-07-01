@@ -25,12 +25,16 @@ export const api = {
   cards: (userId = USER_ID) => jget(`/cards/${userId}`),
   cmr: (userId = USER_ID) => jget(`/cmr/${userId}`),
 
-  chat: (message, sessionId, conversationId, userId = USER_ID) =>
+  conversations: (userId = USER_ID) => jget(`/conversations?user_id=${userId}`),
+  conversation: (conversationId, userId = USER_ID) => jget(`/conversations/${conversationId}?user_id=${userId}`),
+
+  chat: (message, sessionId, conversationId, userId = USER_ID, cardId) =>
     jpost("/chat", {
       user_id: userId,
       message,
       session_id: sessionId || undefined,
       conversation_id: conversationId || undefined,
+      card_id: cardId || undefined,
     }),
 
   redeem: ({ sessionId, candidateId, providerId, mode, consent, userId = USER_ID }) =>

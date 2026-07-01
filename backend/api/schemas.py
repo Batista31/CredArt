@@ -105,6 +105,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
     conversation_id: Optional[str] = None
+    card_id: Optional[str] = None  # the card whose concierge chat is open — recs default to it
 
 
 class ChatResponse(BaseModel):
@@ -190,6 +191,9 @@ class RedeemResponse(BaseModel):
     # address conversationally; `delivery_address` echoes where it shipped.
     address_prompt: Optional[str] = None
     delivery_address: Optional[Address] = None
+    # Provider booking receipt (e.g. Duffel PNR + flight/passenger detail). None
+    # unless the provider returned one (only real bookable providers do).
+    ticket: Optional[dict[str, Any]] = None
 
 
 class OtpRequest(BaseModel):
