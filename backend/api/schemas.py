@@ -126,6 +126,7 @@ class ChatResponse(BaseModel):
     requires_confirmation: bool = False
     memory_updates: list[str] = Field(default_factory=list)
     next_actions: list[str] = Field(default_factory=list)
+    suggested_replies: list[str] = Field(default_factory=list)
 
 
 class SmsRequest(BaseModel):

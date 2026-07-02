@@ -1,6 +1,5 @@
 import React from "react";
-import { api } from "./lib/api.js";
-import { IOSDevice } from "./components/IOSDevice.jsx";
+import { api, USERS, getActiveUser, setActiveUser } from "./lib/api.js";
 import { Dashboard } from "./components/Dashboard.jsx";
 import { Concierge } from "./components/Concierge.jsx";
 import { Confirm } from "./components/Confirm.jsx";
@@ -72,6 +71,68 @@ function Tnc({ card, onClose }) {
   );
 }
 
+/* ---------- Demo persona switcher (Riya ⇄ Samyak) ---------- */
+function PersonaSwitcher({ activeUserId, onSwitch }) {
+  return (
+    <div style={{ display: "inline-flex", gap: 3, padding: 3, borderRadius: 999,
+      background: "var(--surface)", border: "1px solid var(--hairline)" }}>
+      {USERS.map((u) => {
+        const active = u.id === activeUserId;
+        return (
+          <button key={u.id} className="tap" onClick={() => onSwitch(u.id)} title={`Show ${u.name}'s demo`} style={{
+            padding: "6px 13px", borderRadius: 999, border: "none", cursor: "pointer",
+            fontFamily: "var(--font)", fontSize: 12.5, fontWeight: 800,
+            background: active ? "linear-gradient(135deg,var(--brand-600),var(--brand-700))" : "transparent",
+            color: active ? "#fff" : "var(--ink-3)" }}>
+            {u.short}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------- Desktop browser-window shell (replaces the phone frame) ---------- */
+function DesktopWindow({ children }) {
+  return (
+    <div style={{
+      position: "relative", width: "min(1000px, 96vw)", height: "min(84vh, 820px)",
+      background: "#fff", borderRadius: 16, overflow: "hidden", display: "flex", flexDirection: "column",
+      boxShadow: "0 30px 70px rgba(30,12,60,0.28), 0 0 0 1px rgba(0,0,0,0.06)" }}>
+      {/* browser chrome */}
+      <div style={{ height: 44, flexShrink: 0, background: "#f3f0f9", borderBottom: "1px solid var(--hairline)",
+        display: "flex", alignItems: "center", gap: 8, padding: "0 14px" }}>
+        <span style={{ width: 12, height: 12, borderRadius: 99, background: "#ff5f57" }} />
+        <span style={{ width: 12, height: 12, borderRadius: 99, background: "#febc2e" }} />
+        <span style={{ width: 12, height: 12, borderRadius: 99, background: "#28c840" }} />
+        <div style={{ flex: 1, display: "flex", justifyContent: "center" }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#fff",
+            border: "1px solid var(--hairline)", borderRadius: 999, padding: "5px 16px", fontSize: 12,
+            color: "var(--ink-3)", fontWeight: 600, fontFamily: "var(--font)" }}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" strokeWidth="2" /><path d="M8 11V8a4 4 0 018 0v3" stroke="currentColor" strokeWidth="2" /></svg>
+            app.credart.ai
+          </div>
+        </div>
+        <div style={{ width: 44 }} />
+      </div>
+      {/* screen area (positioned so bottom-sheets anchor here) */}
+      <div style={{ flex: 1, position: "relative", overflow: "hidden", background: "var(--bg)" }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* Phone-width centered column for the mobile-tuned screens (dashboard/confirm). */
+function Centered({ children }) {
+  return (
+    <div style={{ height: "100%", maxWidth: 460, margin: "0 auto", position: "relative", overflow: "hidden",
+      boxShadow: "0 0 0 1px var(--hairline)", background: "var(--bg)" }}>
+      {children}
+    </div>
+  );
+}
+
 export default function App() {
   const [screen, setScreen] = React.useState("dashboard");
   const [dir, setDir] = React.useState("fwd");
@@ -84,20 +145,40 @@ export default function App() {
   const [booking, setBooking] = React.useState(null);
   const [showSettings, setShowSettings] = React.useState(false);
   const [tncCard, setTncCard] = React.useState(null);
+  const [activeUserId, setActiveUserId] = React.useState(getActiveUser());
 
   const loaded = React.useRef(false);
   React.useEffect(() => {
     if (loaded.current) return;
     loaded.current = true;
     refreshCards();
-    api.cmr().then((d) => {
-      setWishlistLabels(new Set((d.wishlist || []).map((w) => w.label)));
-      setDismissedLabels(new Set((d.dismissed || []).map((w) => w.label)));
-    }).catch(() => {});
+    refreshCmr();
   }, []);
 
   function refreshCards() {
     api.cards().then((d) => { setUser(d.user); setCards(d.cards || []); }).catch(() => {});
+  }
+
+  function refreshCmr() {
+    api.cmr().then((d) => {
+      setWishlistLabels(new Set((d.wishlist || []).map((w) => w.label)));
+      setDismissedLabels(new Set((d.dismissed || []).map((w) => w.label)));
+    }).catch(() => {});
+  }
+
+  /* Flip the whole app to another seeded persona (Riya ⇄ Samyak). Resets
+     transient screen/chat state so the new user starts clean on the dashboard. */
+  function switchUser(id) {
+    if (id === activeUserId) return;
+    setActiveUser(id);
+    setActiveUserId(id);
+    setChatCard(null);
+    setBooking(null);
+    setWishlistLabels(new Set());
+    setDismissedLabels(new Set());
+    go("dashboard", "back");
+    refreshCards();
+    refreshCmr();
   }
 
   const go = (s, d = "fwd") => { setDir(d); setScreen(s); };
@@ -116,28 +197,37 @@ export default function App() {
   const screenKey = screen + (booking ? "1" : "0") + (chatCard ? chatCard.user_card_id : "");
 
   return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
-      background: "radial-gradient(circle at 30% 20%, #efeaf8, #e3ddf0)", padding: 20, gap: 40, flexWrap: "wrap" }}>
-      <div style={{ maxWidth: 360, color: "var(--ink)" }} className="cr-desktop-pitch">
-        <BankBadge />
-        <h1 style={{ fontFamily: "var(--font)", fontSize: 34, fontWeight: 800, lineHeight: 1.1, margin: "20px 0 10px" }}>
-          Your points,<br />finally spent well.
-        </h1>
-        <p style={{ fontFamily: "var(--font)", color: "var(--ink-2)", fontSize: 15, lineHeight: 1.5 }}>
-          CredArt is an AI rewards concierge. It reads your HDFC cards, finds the best redemption, and books it in one click —
-          demo credits to rehearse, real points + bank OTP to go live.
-        </p>
-        <div style={{ marginTop: 14, fontSize: 13, color: "var(--ink-3)" }}>
-          Balance: <b className="num">{fmt(totalPts)}</b> pts · <b className="num">{fmt(demoPts)}</b> demo
+    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center",
+      background: "radial-gradient(circle at 30% 20%, #efeaf8, #e3ddf0)", padding: "22px 20px 40px" }}>
+      {/* top hero / control bar */}
+      <div style={{ width: "min(1000px, 96vw)", display: "flex", alignItems: "center", justifyContent: "space-between",
+        gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
+        <div style={{ color: "var(--ink)" }}>
+          <BankBadge />
+          <h1 style={{ fontFamily: "var(--font)", fontSize: 24, fontWeight: 800, lineHeight: 1.15, margin: "8px 0 2px" }}>
+            CredArt — AI rewards concierge
+          </h1>
+          <p style={{ fontFamily: "var(--font)", color: "var(--ink-2)", fontSize: 13.5, lineHeight: 1.45, margin: 0, maxWidth: 560 }}>
+            Reads your HDFC cards, finds the best redemption, and books it in one click — demo credits to rehearse,
+            real points + bank OTP to go live.
+          </p>
         </div>
-        <div style={{ marginTop: 16 }}><ModeBadge mode={mode} dark={false} onClick={() => setShowSettings(true)} /></div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 12.5, color: "var(--ink-3)", textAlign: "right" }}>
+            Balance <b className="num">{fmt(totalPts)}</b> pts · <b className="num">{fmt(demoPts)}</b> demo
+          </div>
+          <ModeBadge mode={mode} dark={false} onClick={() => setShowSettings(true)} />
+          <PersonaSwitcher activeUserId={activeUserId} onSwitch={switchUser} />
+        </div>
       </div>
 
-      <IOSDevice dark>
+      <DesktopWindow>
         <div key={screenKey} style={{ height: "100%", animation: `${dir === "fwd" ? "screenIn" : "screenInBack"} .34s cubic-bezier(.2,.8,.2,1)` }}>
           {screen === "dashboard" && (
-            <Dashboard user={user} cards={cards} mode={mode}
-              onOpenChat={openChat} onOpenSettings={() => setShowSettings(true)} onOpenTnc={setTncCard} />
+            <Centered>
+              <Dashboard user={user} cards={cards} mode={mode}
+                onOpenChat={openChat} onOpenSettings={() => setShowSettings(true)} onOpenTnc={setTncCard} />
+            </Centered>
           )}
           {screen === "chat" && (
             <Concierge user={user} card={chatCard} mode={mode}
@@ -146,15 +236,17 @@ export default function App() {
               onWishlist={handleWishlist} onDismiss={handleDismiss} />
           )}
           {screen === "confirm" && booking && (
-            <Confirm booking={booking} mode={mode}
-              onDone={() => { setBooking(null); refreshCards(); go("dashboard", "back"); }}
-              onBackToChat={() => { setBooking(null); go("chat", "back"); }} />
+            <Centered>
+              <Confirm booking={booking} mode={mode}
+                onDone={() => { setBooking(null); refreshCards(); go("dashboard", "back"); }}
+                onBackToChat={() => { setBooking(null); go("chat", "back"); }} />
+            </Centered>
           )}
         </div>
 
         {showSettings && <Settings mode={mode} setMode={setMode} onClose={() => setShowSettings(false)} />}
         {tncCard && <Tnc card={tncCard} onClose={() => setTncCard(null)} />}
-      </IOSDevice>
+      </DesktopWindow>
     </div>
   );
 }

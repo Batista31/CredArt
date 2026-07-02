@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import datetime as _dt
 import json
+import re as _re
 from typing import Any
 
 from services import (
@@ -18,8 +20,8 @@ from .orchestrator import orchestrate
 
 _JOURNEY_SLOTS: dict[str, dict[str, list[str]]] = {
     "travel_flight": {
-        "required": ["origin", "destination", "departure_window", "passengers"],
-        "optional": ["return_date", "cabin_class", "flexibility", "points_cash_preference", "airline_preference"],
+        "required": ["destination", "origin", "departure_window", "passengers", "cabin_class"],
+        "optional": ["return_date", "flexibility", "points_cash_preference", "airline_preference"],
     },
     "travel_hotel": {
         "required": ["destination", "check_in_window", "nights", "guests"],
@@ -48,11 +50,22 @@ _JOURNEY_SLOTS: dict[str, dict[str, list[str]]] = {
     "general_reward_advice": {"required": ["goal"], "optional": ["budget", "timeline"]},
 }
 
+# Slots that describe ONE specific request ("what am I shopping for / booking
+# right now"), not a durable user preference. These must never be carried over
+# from a past conversation's memory — otherwise a previous "phone" search would
+# silently fill the product_category of a new "cooker" conversation.
+_TRANSIENT_SLOTS = frozenset({
+    "product_category", "required_products", "item", "recipient_type", "occasion",
+    "destination", "origin", "departure_window", "return_date", "check_in_window",
+    "nights", "guests", "passengers", "cabin_class", "voucher_type", "topic", "goal", "budget",
+})
+
 _SLOT_QUESTIONS = {
-    "origin": "Where are you flying from?",
+    "origin": "Which city are you flying from?",
     "destination": "Where do you want to go?",
-    "departure_window": "What dates or approximate month are you considering?",
+    "departure_window": "When are you planning to travel — any dates or a rough month?",
     "passengers": "How many people are travelling?",
+    "cabin_class": "Which cabin would you like — economy, premium economy, or business?",
     "check_in_window": "What travel dates or month should I plan around?",
     "nights": "How many nights are you planning to stay?",
     "guests": "How many guests is this for?",
@@ -67,6 +80,129 @@ _SLOT_QUESTIONS = {
     "goal": "What outcome matters most here: best value, convenience, low cash spend, or something else?",
     "topic": "What would you like me to check: benefits, fees, lounge, transfer partners, or something else?",
 }
+
+# Tap-to-answer chips shown under a slot question. Only slots with a small set of
+# natural choices get chips; free-text slots (destination, product_category…) get
+# none so the user just types. Chip text is chosen to parse cleanly on the way back
+# in (_resolve_date for dates, IATA/heuristics elsewhere).
+_SLOT_CHIPS: dict[str, list[str]] = {
+    "cabin_class": ["Economy", "Premium economy", "Business"],
+    "passengers": ["1", "2", "3", "4"],
+    "guests": ["1", "2", "3", "4"],
+    "nights": ["1 night", "2 nights", "3 nights", "A week"],
+    "departure_window": ["This weekend", "Next weekend", "Next month"],
+    "check_in_window": ["This weekend", "Next weekend", "Next month"],
+    "points_cash_preference": ["Use points", "Mostly points", "Points + cash"],
+    "budget": ["₹5,000", "₹10,000", "₹25,000", "₹50,000"],
+    "occasion": ["Birthday", "Anniversary", "Just because"],
+    "recipient_type": ["Partner", "Parent", "Friend", "Myself"],
+    "goal": ["Best value", "Convenience", "Low cash spend"],
+    "topic": ["Benefits", "Fees", "Lounge access", "Transfer partners"],
+    "voucher_type": ["Shopping", "Dining", "Entertainment", "Travel"],
+    "style": ["Cozy", "Modern", "Luxury", "Minimal"],
+    "room_type": ["Living room", "Bedroom", "Kitchen", "Home office"],
+}
+
+
+def _clarify_chips(category: str | None) -> list[str]:
+    """Tap chips for a clarify question — mirror _clarify_question's wording and
+    stay routable by _route_clarify_answer."""
+    cat = (category or "").upper()
+    if cat == "TRAVEL":
+        return ["Flights", "Hotel stay", "Lounge access"]
+    if cat == "DINING":
+        return ["Dining voucher", "Restaurant offer"]
+    if cat == "SHOPPING":
+        return ["Buy a product", "Gift voucher"]
+    if cat == "ENTERTAINMENT":
+        return ["Movies", "Live events", "Wellness / spa"]
+    return ["Travel", "Dining", "Shopping", "Cashback"]
+
+
+_WEEKDAYS = {
+    "monday": 0, "mon": 0, "tuesday": 1, "tue": 1, "tues": 1, "wednesday": 2, "wed": 2,
+    "thursday": 3, "thu": 3, "thur": 3, "thurs": 3, "friday": 4, "fri": 4,
+    "saturday": 5, "sat": 5, "sunday": 6, "sun": 6,
+}
+_MONTHS = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7, "aug": 8,
+    "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+
+def _resolve_date(value: Any, today: _dt.date | None = None) -> str | None:
+    """Best-effort convert a natural-language date phrase to an ISO date (YYYY-MM-DD).
+
+    Handles: ISO, dd/mm[/yy], "today/tomorrow", "<day> <month>" / "<month> <day>",
+    weekday names ("next friday"), "this/next weekend", "next week", "next month".
+    Returns an ISO string only when confidently resolved; otherwise None so the caller
+    keeps the original text (Duffel/the planner can still cope). Past bare dates roll
+    forward to the next occurrence so a demo never books in the past.
+    """
+    if not value or not isinstance(value, str):
+        return None
+    t = value.strip().lower()
+    if not t:
+        return None
+    today = today or _dt.date.today()
+
+    if _re.match(r"^\d{4}-\d{2}-\d{2}$", t):
+        return t
+
+    m = _re.match(r"^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?$", t)
+    if m:
+        d, mo, y = int(m.group(1)), int(m.group(2)), m.group(3)
+        year = int(y) + 2000 if y and len(y) == 2 else (int(y) if y else today.year)
+        try:
+            cand = _dt.date(year, mo, d)
+        except ValueError:
+            return None
+        if not y and cand < today:
+            cand = cand.replace(year=year + 1)
+        return cand.isoformat()
+
+    if "day after tomorrow" in t:
+        return (today + _dt.timedelta(days=2)).isoformat()
+    if "tomorrow" in t:
+        return (today + _dt.timedelta(days=1)).isoformat()
+    if "today" in t or "tonight" in t:
+        return today.isoformat()
+
+    # "21 july" / "21st july" / "july 21"
+    dm = None
+    m = _re.search(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]{3,})", t)
+    if m and m.group(2)[:3] in _MONTHS:
+        dm = (int(m.group(1)), _MONTHS[m.group(2)[:3]])
+    else:
+        m = _re.search(r"\b([a-z]{3,})\s+(\d{1,2})(?:st|nd|rd|th)?", t)
+        if m and m.group(1)[:3] in _MONTHS:
+            dm = (int(m.group(2)), _MONTHS[m.group(1)[:3]])
+    if dm:
+        d, mo = dm
+        ym = _re.search(r"\b(20\d{2})\b", t)
+        year = int(ym.group(1)) if ym else today.year
+        try:
+            cand = _dt.date(year, mo, d)
+        except ValueError:
+            return None
+        if not ym and cand < today:
+            cand = cand.replace(year=year + 1)
+        return cand.isoformat()
+
+    if "weekend" in t:  # upcoming Saturday
+        days = (5 - today.weekday()) % 7 or 7
+        return (today + _dt.timedelta(days=days)).isoformat()
+    for name, wd in _WEEKDAYS.items():
+        if _re.search(rf"\b{name}\b", t):
+            days = (wd - today.weekday()) % 7 or 7  # always the upcoming occurrence
+            return (today + _dt.timedelta(days=days)).isoformat()
+    if "next week" in t:
+        return (today + _dt.timedelta(days=7)).isoformat()
+    if "next month" in t:
+        mo = today.month % 12 + 1
+        year = today.year + (1 if today.month == 12 else 0)
+        return _dt.date(year, mo, min(today.day, 28)).isoformat()
+    return None
 
 
 def _merge_slots(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
@@ -118,14 +254,31 @@ def _missing_slots(journey_type: str | None, known_slots: dict[str, Any]) -> lis
 
 
 def _follow_up_message(journey_type: str, missing_slots: list[str]) -> str:
-    prompts = [_SLOT_QUESTIONS.get(slot, slot.replace("_", " ")) for slot in missing_slots[:3]]
+    # Ask for ONE detail at a time — natural, and it means an answered detail is never
+    # re-asked. A short lead only on the very first question (when nothing's known yet).
+    question = _SLOT_QUESTIONS.get(missing_slots[0], missing_slots[0].replace("_", " ")) if missing_slots else ""
+    first_ask = len(missing_slots) >= _FIRST_ASK_THRESHOLD.get(journey_type, 99)
+    if not first_ask:
+        return question
     if journey_type == "travel_flight":
-        lead = "Nice — we can plan that with your points. I just need a couple of details first so I don’t suggest something random."
+        lead = "Nice — let's book that with your points."
+    elif journey_type == "travel_hotel":
+        lead = "Happy to help you find a stay to use your points on."
     elif journey_type == "home_setup":
-        lead = "Nice — let’s make this feel intentional. A few details will help me narrow the right products instead of throwing generic picks at you."
+        lead = "Nice — let's make this feel intentional."
     else:
-        lead = "I can help with that. I just need a bit more context first."
-    return lead + " " + " ".join(prompts)
+        lead = "Happy to help with that."
+    return lead + " " + question
+
+
+# How many required slots a journey starts with — used to show the warm lead only on the
+# very first (nothing-known-yet) question, then plain one-line questions after that.
+_FIRST_ASK_THRESHOLD = {
+    "travel_flight": 5,
+    "travel_hotel": 4,
+    "home_setup": 4,
+    "product_purchase": 2,
+}
 
 
 def _home_item_to_candidate(item: dict) -> dict:
@@ -149,6 +302,56 @@ _NEVER_FOLLOWUP_JOURNEYS = {
     "general_reward_advice", "card_benefit_lookup", "points_expiry_help",
     "cashback_or_statement_credit",
 }
+
+# Vague / domain-level openers ("how should I spend my points?", "I want to travel")
+# get ONE clarifying question before we recommend, so the concierge gathers intent
+# instead of guessing. Pure "what's expiring" (points_expiry_help / check_expiry) stays
+# instant and is intentionally NOT here.
+_CLARIFY_JOURNEYS = frozenset({"general_reward_advice", "card_benefit_lookup"})
+_CLARIFY_MARKER = "__clarify__"
+
+
+def _clarify_question(journey_type: str, category: str | None) -> str:
+    cat = (category or "").upper()
+    if cat == "TRAVEL":
+        return ("Happy to help you put those points toward travel! "
+                "Are you thinking flights, a hotel stay, or lounge access?")
+    if cat == "DINING":
+        return "Nice — are you after a dining voucher, or a restaurant/delivery offer?"
+    if cat == "SHOPPING":
+        return "Sure — shopping for something specific, or a gift voucher?"
+    if cat == "ENTERTAINMENT":
+        return "Fun — are you thinking movies, live events, or something wellness/spa?"
+    return "Happy to help! What are you leaning toward — travel, dining, shopping, or cashback?"
+
+
+def _route_clarify_answer(text: str) -> tuple[str | None, str | None]:
+    """Map a clarify answer to (journey_type, category).
+
+    Booking words ("flights", "hotel") route into the real slot-filling flows; domain
+    words ("travel", "dining") route to a category-filtered recommendation. Returns
+    (None, None) when unparseable, so the caller falls back to a general recommendation.
+    """
+    t = (text or "").lower()
+    if any(w in t for w in ("flight", "fly", "airfare", "air ticket")):
+        return ("travel_flight", None)
+    if any(w in t for w in ("hotel", "stay", "resort", "room", "accommodation")):
+        return ("travel_hotel", None)
+    if "lounge" in t:
+        return ("card_benefit_lookup", "TRAVEL")
+    if any(w in t for w in ("travel", "trip", "vacation", "holiday", "getaway", "miles")):
+        return ("card_benefit_lookup", "TRAVEL")
+    if any(w in t for w in ("dining", "dine", "food", "eat", "restaurant", "cuisine",
+                            "zomato", "swiggy", "dinner", "lunch")):
+        return ("card_benefit_lookup", "DINING")
+    if any(w in t for w in ("shop", "buy", "purchase", "product", "gadget", "electronic",
+                            "fashion", "amazon", "voucher", "merch")):
+        return ("card_benefit_lookup", "SHOPPING")
+    if any(w in t for w in ("movie", "concert", "show", "event", "experience", "spa", "wellness")):
+        return ("card_benefit_lookup", "ENTERTAINMENT")
+    if any(w in t for w in ("cashback", "cash back", "statement", "credit")):
+        return ("cashback_or_statement_credit", None)
+    return (None, None)
 
 
 async def _llm_postcandidate_check(
@@ -211,7 +414,17 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
     # If previous turn was asking for slot fills, keep the established journey_type
     # so follow-up answers ("Mumbai, 2 people") don't re-classify the intent.
     prior_response_type = existing_state.get("response_type")
-    if prior_response_type == "follow_up_question" and existing_state.get("journey_type"):
+    # Did the user just answer a clarifying "what are you leaning toward?" question?
+    answering_clarify = (prior_response_type == "follow_up_question"
+                         and (existing_state.get("missing_slots") or []) == [_CLARIFY_MARKER])
+    if answering_clarify:
+        # Re-route on their answer: booking words → flight/hotel slot-filling; domain
+        # words → category-filtered recommendation. Don't lock to the old clarify journey.
+        routed_jt, routed_cat = _route_clarify_answer(message)
+        journey_type = routed_jt or "card_benefit_lookup"
+        if routed_cat:
+            intent.category = routed_cat
+    elif prior_response_type == "follow_up_question" and existing_state.get("journey_type"):
         journey_type = existing_state["journey_type"]
     else:
         journey_type = intent.journey_type or existing_state.get("journey_type") or "general_reward_advice"
@@ -226,16 +439,29 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
             _mem_prefs = json.loads(_mem_prefs)
         except json.JSONDecodeError:
             _mem_prefs = {}
-    _scoped_mem = {k: v for k, v in _mem_prefs.items() if k in _allowed}
+    _scoped_mem = {k: v for k, v in _mem_prefs.items()
+                   if k in _allowed and k not in _TRANSIENT_SLOTS}
     known_slots = _merge_slots(_scoped_mem, known_slots)
     # Safety net: if the prior turn asked for slots and the LLM extracted nothing for any
     # of them, assign the user's reply to the first still-missing asked slot so the
     # follow-up loop always makes progress instead of re-asking the same question.
-    if prior_response_type == "follow_up_question":
+    if prior_response_type == "follow_up_question" and not answering_clarify:
         _prev_missing = existing_state.get("missing_slots") or []
         _still = [s for s in _prev_missing if known_slots.get(s) in (None, "", [])]
         if _prev_missing and len(_still) == len(_prev_missing) and message.strip():
             known_slots[_still[0]] = message.strip()
+    # Answered a clarify with a domain word ("travel"/"dining") → recommend that category
+    # now. Prime the intent so orchestrate assembles candidates (booking routes like
+    # travel_flight are handled by their own slot-filling instead).
+    if answering_clarify and journey_type not in (
+            "travel_flight", "travel_hotel", "product_purchase", "gift_purchase", "merchandise_purchase"):
+        if intent.kind in ("greeting", "check_expiry", "unknown"):
+            intent.kind = "explore_benefits"
+        intent.is_complete = True
+        if intent.category:
+            known_slots["topic"] = intent.category  # satisfy card_benefit_lookup's required slot
+        if not (intent.query or "").strip():
+            intent.query = (intent.category or "rewards").lower()
     # Carry flight fields into known_slots for continuity across turns.
     if intent.origin:
         known_slots["origin"] = intent.origin
@@ -243,15 +469,30 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
         known_slots["destination"] = intent.destination
     if intent.depart_date:
         known_slots["departure_window"] = intent.depart_date
-    # Normalize city names → IATA codes so slot-fill answers like "Bengaluru" are usable.
-    if journey_type == "travel_flight":
+    # Normalize what the user actually GAVE us (we still ask for each required detail —
+    # nothing is assumed), so an answer isn't wasted or re-asked:
+    #   - city names like "Bengaluru" → IATA codes the flight search understands
+    #   - relative/natural dates ("next Friday", "21 July") → a real ISO date, so once the
+    #     user answers the dates question we never re-ask it.
+    if journey_type in ("travel_flight", "travel_hotel"):
         from .intent import CITY_TO_IATA
-        for field in ("origin", "destination"):
-            v = (known_slots.get(field) or "").strip()
-            if v and len(v) != 3:  # not already IATA
-                iata = CITY_TO_IATA.get(v.lower())
-                if iata:
-                    known_slots[field] = iata
+        _today = _dt.date.today()
+        if journey_type == "travel_flight":
+            for field in ("origin", "destination"):
+                v = (known_slots.get(field) or "").strip()
+                if v and len(v) != 3:  # not already IATA
+                    iata = CITY_TO_IATA.get(v.lower())
+                    if iata:
+                        known_slots[field] = iata
+        date_slot = "departure_window" if journey_type == "travel_flight" else "check_in_window"
+        # Resolve the first date-like value we can find: the current slot, other date
+        # aliases, or the raw user message (a bare "next friday" reply to the dates question).
+        for raw in (known_slots.get(date_slot), known_slots.get("depart_date"),
+                    known_slots.get("travel_date"), message):
+            iso = _resolve_date(raw, _today)
+            if iso:
+                known_slots[date_slot] = iso
+                break
     missing_slots = _missing_slots(journey_type, known_slots)
 
     cards = await user_service.get_user_cards(user_id)
@@ -284,7 +525,18 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
             journey_type, known_slots, conv_history_dicts, intent.query or message,
             profile_defaults=profile_defaults)
 
-    if use_planner and plan and not plan.get("ready") and plan.get("question"):
+    # Clarify gate: a vague/domain opener gets ONE question to pin the intent before we
+    # recommend, so CredArt gathers what the user actually wants instead of guessing.
+    ask_clarify = (journey_type in _CLARIFY_JOURNEYS and not answering_clarify
+                   and intent.kind not in ("greeting", "check_expiry"))
+    if ask_clarify:
+        response_type = "follow_up_question"
+        assistant_message = _clarify_question(journey_type, intent.category)
+        missing_slots = [_CLARIFY_MARKER]
+        await conversation_service.upsert_unfinished_task(
+            user_id, conversation_id, journey_type, conversation["title"], known_slots, status="open")
+        next_actions = ["answer_question"]
+    elif use_planner and plan and not plan.get("ready") and plan.get("question"):
         # Still gathering context — ask the planner's next question.
         response_type = "follow_up_question"
         assistant_message = plan["question"]
@@ -293,9 +545,12 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
             user_id, conversation_id, journey_type, conversation["title"], known_slots, status="open")
         next_actions = ["answer_question"]
     elif (not use_planner and missing_slots
-          and intent.kind not in ("greeting", "check_expiry", "unknown")
-          and journey_type not in _NEVER_FOLLOWUP_JOURNEYS):
-        # Static fallback questioning for non-planned journeys with required slots.
+          and journey_type not in _NEVER_FOLLOWUP_JOURNEYS
+          # The journey is specifically classified (not a generic/instant one) and is missing
+          # required details, so ask — even if a terse message ("Goa", "I want a phone")
+          # parses as kind=unknown. Only pure greetings/expiry short-circuit questioning.
+          and intent.kind not in ("greeting", "check_expiry")):
+        # Static, one-question-at-a-time slot-filling for non-planned journeys (incl. travel).
         response_type = "follow_up_question"
         assistant_message = _follow_up_message(journey_type, missing_slots)
         await conversation_service.upsert_unfinished_task(
@@ -414,6 +669,13 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
         conversation_id=conversation_id,
         status="ready" if recommendations else "draft",
     )
+    # Tap-to-answer chips for the current follow-up question (clarify or slot).
+    suggested_replies: list[str] = []
+    if response_type == "follow_up_question":
+        if missing_slots == [_CLARIFY_MARKER]:
+            suggested_replies = _clarify_chips(intent.category)
+        elif missing_slots:
+            suggested_replies = _SLOT_CHIPS.get(missing_slots[0], [])
     return {
         "conversation_id": str(conversation_id) if conversation_id is not None else None,
         "message": assistant_message,
@@ -425,6 +687,7 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
         "requires_confirmation": requires_confirmation,
         "memory_updates": memory_updates,
         "next_actions": next_actions,
+        "suggested_replies": suggested_replies,
         "intent": intent,
         "candidates": candidates,
         "tool_trace": tool_trace,

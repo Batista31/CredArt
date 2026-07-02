@@ -106,7 +106,9 @@ async def search_merchandise_candidates(query: str, cards: list[dict], limit: in
             caveat=None if p.get("rating", 5) >= 3.5 else "lower rated — check reviews",
             rank=i + 1,
             fulfillment_options=[
-                {"provider_id": "demo", "label": "Convert points & order", "path": "demo",
+                {"provider_id": "tango_voucher", "label": "Convert points → Amazon voucher & order",
+                 "path": "api", "mode": "live", "currency": "points", "available": True, "note": None},
+                {"provider_id": "demo", "label": "Demo (simulate order)", "path": "demo",
                  "mode": "demo", "currency": "demo_points", "available": True, "note": None},
             ],
             metadata={"brand": p.get("brand"), "thumbnail": p.get("thumbnail"),

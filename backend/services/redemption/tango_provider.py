@@ -31,6 +31,7 @@ _DEFAULT = ("U705529", "Amazon Pay Gift Card India ₹1,000", 1000, "INR")
 class TangoProvider(RedemptionProvider):
     provider_id = "tango_voucher"
     label = "Get voucher (Tango Card · live)"
+    path = "api"
     mode = "live"
     currency = "points"
 
