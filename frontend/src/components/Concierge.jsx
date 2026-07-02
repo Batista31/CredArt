@@ -39,15 +39,23 @@ function OptionCard({ cand, mode, onRedeem, wishlisted, dismissed, onWishlist, o
   if (dismissed) return null;
   const opts = cand.fulfillment_options || [];
   const pts = cand.points_cost;
+  const thumb = cand.metadata && cand.metadata.thumbnail;
   return (
     <div style={{
       display: "flex", flexDirection: "column", gap: 11, padding: 13, background: "#fff",
       borderRadius: "var(--r-md)", border: "1.5px solid var(--hairline)", boxShadow: "var(--sh-sm)", position: "relative" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ width: 42, height: 42, borderRadius: 12, background: "var(--brand-600)",
-          display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#fff", fontWeight: 800, fontSize: 16 }}>
-          {(cand.label || "?").slice(0, 1)}
-        </div>
+        {thumb ? (
+          <img src={thumb} alt={cand.label} loading="lazy"
+            onError={(e) => { e.currentTarget.style.display = "none"; }}
+            style={{ width: 68, height: 68, borderRadius: 12, objectFit: "cover", flexShrink: 0,
+              background: "var(--surface)", border: "1px solid var(--hairline)" }} />
+        ) : (
+          <div style={{ width: 42, height: 42, borderRadius: 12, background: "var(--brand-600)",
+            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#fff", fontWeight: 800, fontSize: 16 }}>
+            {(cand.label || "?").slice(0, 1)}
+          </div>
+        )}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <span style={{ fontSize: 14, fontWeight: 800, color: "var(--ink)" }}>{cand.label}</span>
@@ -161,7 +169,8 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
       if (r.session_id) setSessionId(r.session_id);
       if (r.conversation_id) setConversationId(r.conversation_id);
       const showCandidates = r.response_type !== "follow_up_question";
-      pushMsg({ who: "bot", text: r.reply, candidates: showCandidates ? (r.candidates || []) : [] });
+      pushMsg({ who: "bot", text: r.reply, candidates: showCandidates ? (r.candidates || []) : [],
+        chips: r.suggested_replies || [] });
     } catch (e) {
       setErr(String(e.message || e));
       pushMsg({ who: "bot", text: "I couldn't reach the rewards engine — is the backend running on :8001?" });
@@ -174,7 +183,7 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
     <div className="cr-root" style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
       {/* header */}
       <div style={{ background: "linear-gradient(135deg,var(--brand-700),var(--brand-900))", color: "#fff",
-        padding: "54px 16px 14px", display: "flex", alignItems: "center", gap: 12, boxShadow: "0 6px 18px rgba(42,14,85,0.25)", zIndex: 5 }}>
+        padding: "20px 20px 16px", display: "flex", alignItems: "center", gap: 12, boxShadow: "0 6px 18px rgba(42,14,85,0.25)", zIndex: 5 }}>
         <button className="tap" onClick={onBack} style={{ background: "rgba(255,255,255,0.14)", border: "none", width: 36, height: 36,
           borderRadius: 11, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <svg width="18" height="18" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" stroke="#fff" strokeWidth="2.4" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -196,8 +205,9 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
       </div>
 
       {/* messages */}
-      <div ref={scroller} className="no-sb" style={{ flex: 1, overflowY: "auto", padding: "18px 14px 14px", display: "flex", flexDirection: "column", gap: 12 }}>
-        {messages.map((m) => (
+      <div ref={scroller} className="no-sb" style={{ flex: 1, overflowY: "auto", padding: "18px 14px 14px" }}>
+       <div style={{ maxWidth: 780, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: 12 }}>
+        {messages.map((m, mi) => (
           <div key={m.id} className="animate-msg" style={{ display: "flex", flexDirection: "column", gap: 9, alignItems: m.who === "user" ? "flex-end" : "flex-start" }}>
             <div style={{ display: "flex", gap: 8, alignItems: "flex-end", maxWidth: "100%", flexDirection: m.who === "user" ? "row-reverse" : "row" }}>
               {m.who === "bot" && <KobieAvatar size={30} state={m.candidates && m.candidates.length ? "happy" : "idle"} />}
@@ -208,6 +218,13 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
             {m.intro && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingLeft: 38, maxWidth: "92%" }}>
                 {quickChips.map((c, i) => <Chip key={c} delay={i * 70} onClick={() => sendText(c)}>{c}</Chip>)}
+              </div>
+            )}
+
+            {/* tap-to-answer chips for the current follow-up question (last message only) */}
+            {m.chips && m.chips.length > 0 && mi === messages.length - 1 && !busy && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingLeft: 38, maxWidth: "92%" }}>
+                {m.chips.map((c, i) => <Chip key={c} delay={i * 60} onClick={() => sendText(c)}>{c}</Chip>)}
               </div>
             )}
 
@@ -233,20 +250,23 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
             </div>
           </div>
         )}
+       </div>
       </div>
 
       {err && <div style={{ padding: "6px 14px", fontSize: 11.5, color: "var(--red)", background: "var(--red-bg)" }}>{err}</div>}
 
       {/* input */}
-      <div style={{ padding: "10px 14px 30px", background: "#fff", borderTop: "1px solid var(--hairline)", display: "flex", gap: 10, alignItems: "center" }}>
-        <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()}
-          placeholder="Message CredArt…" style={{ flex: 1, border: "none", background: "var(--bg)", borderRadius: 999,
-            padding: "13px 18px", fontFamily: "var(--font)", fontSize: 14.5, color: "var(--ink)", outline: "none" }} />
-        <button className="tap" onClick={send} style={{ width: 46, height: 46, borderRadius: 999, border: "none", flexShrink: 0,
-          background: "linear-gradient(160deg,var(--brand-600),var(--brand-700))", display: "flex", alignItems: "center", justifyContent: "center",
-          boxShadow: "0 6px 14px rgba(84,35,155,0.3)" }}>
-          <svg width="20" height="20" viewBox="0 0 24 24"><path d="M4 12l16-8-6 8 6 8z" fill="#fff"/></svg>
-        </button>
+      <div style={{ padding: "10px 14px 18px", background: "#fff", borderTop: "1px solid var(--hairline)" }}>
+        <div style={{ maxWidth: 780, margin: "0 auto", display: "flex", gap: 10, alignItems: "center" }}>
+          <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()}
+            placeholder="Message CredArt…" style={{ flex: 1, border: "none", background: "var(--bg)", borderRadius: 999,
+              padding: "13px 18px", fontFamily: "var(--font)", fontSize: 14.5, color: "var(--ink)", outline: "none" }} />
+          <button className="tap" onClick={send} style={{ width: 46, height: 46, borderRadius: 999, border: "none", flexShrink: 0,
+            background: "linear-gradient(160deg,var(--brand-600),var(--brand-700))", display: "flex", alignItems: "center", justifyContent: "center",
+            boxShadow: "0 6px 14px rgba(84,35,155,0.3)" }}>
+            <svg width="20" height="20" viewBox="0 0 24 24"><path d="M4 12l16-8-6 8 6 8z" fill="#fff"/></svg>
+          </button>
+        </div>
       </div>
     </div>
   );

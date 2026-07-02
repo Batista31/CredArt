@@ -151,7 +151,7 @@ async def add_dismissed(user_id: str, label: str, card_id: str | None = None) ->
 def is_physical_goods(candidate: dict) -> bool:
     """True if this candidate is a physical product that must be shipped.
     Transfers, perks and expiry nudges are never physical."""
-    if candidate.get("kind") != "redemption":
+    if candidate.get("kind") not in ("redemption", "merchandise"):
         return False
     category = (candidate.get("category") or "").upper()
     if category == "SHOPPING":

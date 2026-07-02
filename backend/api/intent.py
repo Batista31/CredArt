@@ -31,7 +31,11 @@ _PRODUCT_WORDS = ["phone", "smartphone", "iphone", "laptop", "macbook", "tablet"
                   "headphone", "earbud", "airpod", "watch", "smartwatch", "speaker", "camera",
                   "tv", "television", "console", "playstation", "xbox", "gadget", "appliance",
                   "mixer", "blender", "shoe", "sneaker", "bag", "backpack", "sunglass",
-                  "phone stand", "charger", "monitor", "keyboard", "mouse", "merchandise", "product"]
+                  "phone stand", "charger", "monitor", "keyboard", "mouse", "merchandise", "product",
+                  # kitchen / home appliances
+                  "cooker", "microwave", "oven", "refrigerator", "fridge", "washing machine",
+                  "air fryer", "airfryer", "toaster", "kettle", "grinder", "vacuum cleaner",
+                  "cooktop", "induction", "geyser", "air conditioner", "dishwasher", "purifier"]
 
 CITY_TO_IATA = {
     "bangalore": "BLR", "bengaluru": "BLR", "mumbai": "BOM", "bombay": "BOM",
@@ -111,10 +115,18 @@ async def extract_intent(
             # Deterministic journey override: smaller LLMs often mislabel "buy a <product>
             # with points" as general advice. If the text clearly names orderable
             # merchandise, force product_purchase so the merchandise flow engages.
+            prod = next((w for w in _PRODUCT_WORDS if w in text), None)
             if merged.get("journey_type") in (None, "general_reward_advice", "card_benefit_lookup"):
-                if _match(text, _PRODUCT_WORDS) and _match(text, _BUY_WORDS):
+                if prod and _match(text, _BUY_WORDS):
                     merged["journey_type"] = "product_purchase"
                     merged.setdefault("kind", "redeem")
+            # Capture the product the user named THIS turn as product_category, so the
+            # merchandise search uses the actual item — not a stale slot carried over
+            # from a previous conversation. setdefault preserves any more specific
+            # value the LLM already extracted.
+            if prod and merged.get("journey_type") in ("product_purchase", "merchandise_purchase", "gift_purchase"):
+                merged.setdefault("slots", {})
+                merged["slots"].setdefault("product_category", prod)
             is_complete = True
             follow_up_question = None
             if merged.get("kind") not in _ALWAYS_COMPLETE:

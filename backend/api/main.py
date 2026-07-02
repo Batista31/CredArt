@@ -125,6 +125,7 @@ async def chat(req: ChatRequest):
         requires_confirmation=concierge["requires_confirmation"],
         memory_updates=concierge["memory_updates"],
         next_actions=concierge["next_actions"],
+        suggested_replies=concierge.get("suggested_replies", []),
     )
     await store.append_turn(session, "assistant", resp.reply)
     dumps = [c.model_dump() for c in candidates]

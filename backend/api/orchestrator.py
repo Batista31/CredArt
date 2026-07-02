@@ -238,7 +238,7 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
     # --- Phase 9: stable id + fulfilment options (live providers + always demo) ---
     for c in candidates:
         c.candidate_id = uuid4().hex[:8]
-        if c.kind in ("redemption", "perk", "transfer"):
+        if c.kind in ("redemption", "perk", "transfer", "merchandise"):
             c.fulfillment_options = [FulfillmentOption(**o)
                                      for o in registry.fulfillment_options_for(c.model_dump())]
 
