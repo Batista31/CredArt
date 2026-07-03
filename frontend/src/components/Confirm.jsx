@@ -151,6 +151,11 @@ export function Confirm({ booking, mode, onDone, onBackToChat }) {
   const [otpBusy, setOtpBusy] = React.useState(false);
   const [failReason, setFailReason] = React.useState("");
   const bookingSessionId = React.useRef(null);
+  // Fire the real redemption EXACTLY once. React.StrictMode (dev) mounts effects
+  // twice; without this guard api.redeem() would be called twice (double spend).
+  // mountedRef is reset on the StrictMode remount so the UI still completes.
+  const startedRef = React.useRef(false);
+  const mountedRef = React.useRef(true);
 
   const markDone = (i) => setDone((d) => { const n = [...d]; n[i] = true; return n; });
 
@@ -166,7 +171,9 @@ export function Confirm({ booking, mode, onDone, onBackToChat }) {
 
   // drive the real redemption
   React.useEffect(() => {
-    let cancelled = false;
+    mountedRef.current = true;
+    if (startedRef.current) return () => { mountedRef.current = false; };
+    startedRef.current = true;
     (async () => {
       // fire the real call immediately, animate the first leg in parallel
       const redeemPromise = api.redeem({
@@ -176,8 +183,8 @@ export function Confirm({ booking, mode, onDone, onBackToChat }) {
       await runSteps(0, 3);
       let res;
       try { res = await redeemPromise; }
-      catch (e) { if (!cancelled) { setFailReason(String(e.message || e)); setPhase("failed"); } return; }
-      if (cancelled) return;
+      catch (e) { if (mountedRef.current) { setFailReason(String(e.message || e)); setPhase("failed"); } return; }
+      if (!mountedRef.current) return;
 
       if (res.status === "otp_required") {
         bookingSessionId.current = res.booking_session_id;
@@ -190,17 +197,17 @@ export function Confirm({ booking, mode, onDone, onBackToChat }) {
             secondsLeft: s.otp_deadline ? Math.max(10, Math.round(s.otp_deadline - Date.now() / 1000)) : 150,
           };
         } catch { /* use fallback ctx */ }
-        if (!cancelled) { setOtpCtx(ctx); setPhase("otp"); }
+        if (mountedRef.current) { setOtpCtx(ctx); setPhase("otp"); }
       } else if (res.status === "completed") {
         setResult(res);
         await runSteps(3, allSteps.length);
-        if (!cancelled) setPhase("success");
-      } else {
+        if (mountedRef.current) setPhase("success");
+      } else if (mountedRef.current) {
         setFailReason(res.rollback_reason || res.address_prompt || res.detail || "Could not complete this redemption.");
         setPhase("failed");
       }
     })();
-    return () => { cancelled = true; };
+    return () => { mountedRef.current = false; };
   }, []);
 
   async function submitOtp(code) {

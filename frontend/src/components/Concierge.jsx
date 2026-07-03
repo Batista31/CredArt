@@ -145,13 +145,47 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
   const [sessionId, setSessionId] = React.useState(null);
   const [conversationId, setConversationId] = React.useState(null);
   const [err, setErr] = React.useState(null);
+  const [convos, setConvos] = React.useState([]);
+  const [showHistory, setShowHistory] = React.useState(false);
   const scroller = React.useRef(null);
   const started = React.useRef(false);
 
+  function introMessage() {
+    return { id: nid(), who: "bot", intro: true,
+      text: `Hi ${(user?.name || "there").split(" ")[0]} — I'm CredArt, your ${cardName} concierge. What would you like to do with your points?` };
+  }
+  function showIntro() {
+    setConversationId(null); setSessionId(null); setMessages([introMessage()]);
+  }
+  async function loadConversation(id) {
+    try {
+      const data = await api.conversation(id);
+      const msgs = (data.messages || [])
+        .filter((m) => m.content)
+        .map((m) => ({ id: nid(), who: m.role === "user" ? "user" : "bot", text: m.content }));
+      setMessages(msgs.length ? msgs : [introMessage()]);
+      setConversationId(id);
+      setSessionId(null); // fresh session; dialogue state resumes by conversation_id
+      setShowHistory(false);
+    } catch { showIntro(); }
+  }
+  async function openHistory() {
+    try { const { conversations } = await api.conversations(); setConvos(conversations || []); } catch { /* ignore */ }
+    setShowHistory(true);
+  }
+
+  // On mount, restore the most recent conversation so a reload isn't a blank chat.
   React.useEffect(() => {
     if (started.current) return;
     started.current = true;
-    setMessages([{ id: nid(), who: "bot", text: `Hi ${(user?.name || "there").split(" ")[0]} — I'm CredArt, your ${cardName} concierge. What would you like to do with your points?`, intro: true }]);
+    (async () => {
+      try {
+        const { conversations } = await api.conversations();
+        setConvos(conversations || []);
+        if (conversations && conversations.length) { await loadConversation(conversations[0].id); return; }
+      } catch { /* fall through to a fresh intro */ }
+      showIntro();
+    })();
   }, []);
 
   React.useEffect(() => {
@@ -177,10 +211,12 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
     } finally { setBusy(false); }
   }
 
-  function send() { const t = input.trim(); if (!t) return; setInput(""); sendText(t); }
+  // Don't clear the input while a reply is in flight — sendText would drop the
+  // message and the user's typing would silently vanish.
+  function send() { const t = input.trim(); if (!t || busy) return; setInput(""); sendText(t); }
 
   return (
-    <div className="cr-root" style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
+    <div className="cr-root" style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg)", position: "relative" }}>
       {/* header */}
       <div style={{ background: "linear-gradient(135deg,var(--brand-700),var(--brand-900))", color: "#fff",
         padding: "20px 20px 16px", display: "flex", alignItems: "center", gap: 12, boxShadow: "0 6px 18px rgba(42,14,85,0.25)", zIndex: 5 }}>
@@ -196,6 +232,14 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
             HDFC {cardName} · concierge
           </div>
         </div>
+        <button className="tap" onClick={openHistory} title="Conversation history" style={{ background: "rgba(255,255,255,0.14)", border: "none", width: 36, height: 36,
+          borderRadius: 11, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="#fff" strokeWidth="1.8"/><path d="M12 7.5V12l3 2" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+        <button className="tap" onClick={showIntro} title="New chat" style={{ background: "rgba(255,255,255,0.14)", border: "none", width: 36, height: 36,
+          borderRadius: 11, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="#fff" strokeWidth="2.2" strokeLinecap="round"/></svg>
+        </button>
         {headerPts != null && (
           <div className="num" style={{ textAlign: "right" }}>
             <div style={{ fontSize: 15, fontWeight: 800 }}>{fmt(headerPts)}</div>
@@ -261,13 +305,51 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
           <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()}
             placeholder="Message CredArt…" style={{ flex: 1, border: "none", background: "var(--bg)", borderRadius: 999,
               padding: "13px 18px", fontFamily: "var(--font)", fontSize: 14.5, color: "var(--ink)", outline: "none" }} />
-          <button className="tap" onClick={send} style={{ width: 46, height: 46, borderRadius: 999, border: "none", flexShrink: 0,
+          <button className="tap" onClick={send} disabled={busy} style={{ width: 46, height: 46, borderRadius: 999, border: "none", flexShrink: 0,
             background: "linear-gradient(160deg,var(--brand-600),var(--brand-700))", display: "flex", alignItems: "center", justifyContent: "center",
+            opacity: busy ? 0.5 : 1, cursor: busy ? "wait" : "pointer",
             boxShadow: "0 6px 14px rgba(84,35,155,0.3)" }}>
             <svg width="20" height="20" viewBox="0 0 24 24"><path d="M4 12l16-8-6 8 6 8z" fill="#fff"/></svg>
           </button>
         </div>
       </div>
+
+      {/* conversation history drawer */}
+      {showHistory && (
+        <div onClick={() => setShowHistory(false)} style={{ position: "absolute", inset: 0, zIndex: 40,
+          background: "rgba(20,10,40,0.35)", display: "flex", animation: "fadeIn .2s ease" }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 300, maxWidth: "82%", height: "100%",
+            background: "#fff", boxShadow: "6px 0 24px rgba(0,0,0,0.15)", display: "flex", flexDirection: "column" }}>
+            <div style={{ padding: "16px 16px 12px", borderBottom: "1px solid var(--hairline)" }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: "var(--ink)" }}>Conversations</div>
+              <button className="tap" onClick={() => { showIntro(); setShowHistory(false); }} style={{ marginTop: 10, width: "100%",
+                display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderRadius: 10, cursor: "pointer",
+                border: "1px solid var(--brand-200)", background: "var(--brand-50)", color: "var(--brand-700)", fontFamily: "var(--font)", fontSize: 13.5, fontWeight: 700 }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"/></svg>
+                New chat
+              </button>
+            </div>
+            <div className="no-sb" style={{ flex: 1, overflowY: "auto", padding: 10 }}>
+              {convos.length === 0 && <div style={{ padding: 14, fontSize: 12.5, color: "var(--ink-3)" }}>No past conversations yet.</div>}
+              {convos.map((c) => {
+                const active = c.id === conversationId;
+                return (
+                  <button key={c.id} className="tap" onClick={() => loadConversation(c.id)} style={{ width: "100%", textAlign: "left",
+                    display: "block", padding: "10px 12px", borderRadius: 10, marginBottom: 6, cursor: "pointer",
+                    border: `1px solid ${active ? "var(--brand-300)" : "var(--hairline)"}`, background: active ? "var(--brand-50)" : "#fff" }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {c.title || "Untitled chat"}
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                      {(c.journey_type || "chat").replace(/_/g, " ")}{c.status ? ` · ${c.status}` : ""}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

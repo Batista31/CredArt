@@ -1,14 +1,22 @@
 # api/session.py
-# Local demo-only in-memory session store.
-# Sessions reset whenever the backend restarts.
+# Session store: Redis-backed when REDIS_URL is set, else in-memory.
+#
+# In-memory sessions reset whenever the backend restarts (fine for solo dev).
+# With Redis, sessions survive restarts/--reload and can be shared across
+# workers. If Redis is configured but a call fails, we fall back to the
+# in-memory dict for that call so a Redis blip degrades gracefully rather than
+# breaking active chats.
 
 from __future__ import annotations
 
+import json
+import os
 import time
 import uuid
 from typing import Any
 
 SESSION_TTL_SECONDS = 60 * 60
+_KEY_PREFIX = "credart:session:"
 
 # Fields that must never be carried over from one turn's intent to the next.
 _TRANSIENT_INTENT_FIELDS = {"is_complete", "follow_up_question"}
@@ -50,10 +58,55 @@ def merge_partial_intent(old: dict, new: dict) -> dict:
 
 
 class SessionStore:
-    backend = "memory"
-
     def __init__(self) -> None:
-        self._sessions: dict[str, dict[str, Any]] = {}
+        self._sessions: dict[str, dict[str, Any]] = {}  # in-memory (fallback / no-Redis)
+        self._url = os.getenv("REDIS_URL")
+        self._redis = None                # lazily-created redis.asyncio client
+        self._redis_ready: bool | None = None  # None=untested, True=ok, False=unavailable
+
+    @property
+    def backend(self) -> str:
+        """Reported by /health. 'redis' when configured and not known-failed."""
+        if not self._url or self._redis_ready is False:
+            return "memory"
+        return "redis"
+
+    @staticmethod
+    def _key(sid: str) -> str:
+        return f"{_KEY_PREFIX}{sid}"
+
+    async def _client(self):
+        """Return a ready redis client, or None to use the in-memory path.
+
+        Connects lazily on first use and pings once; a failure is remembered so
+        we don't retry on every turn. Never raises."""
+        if not self._url or self._redis_ready is False:
+            return None
+        if self._redis is not None:
+            return self._redis
+        try:
+            import redis.asyncio as redis  # lazy; optional dependency
+            client = redis.from_url(self._url, decode_responses=True)
+            await client.ping()
+            self._redis = client
+            self._redis_ready = True
+            print("[session] Redis-backed session store active")
+            return client
+        except Exception as exc:  # noqa: BLE001
+            self._redis_ready = False
+            print(f"[session] Redis unavailable ({exc}); using in-memory sessions")
+            return None
+
+    async def startup(self) -> None:
+        """Eagerly connect so /health reports accurately. Never raises."""
+        await self._client()
+
+    async def shutdown(self) -> None:
+        if self._redis is not None:
+            try:
+                await self._redis.aclose()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _make_session(self) -> dict[str, Any]:
         sid = uuid.uuid4().hex
@@ -70,15 +123,36 @@ class SessionStore:
             "expires_at": now + SESSION_TTL_SECONDS,
         }
 
-    async def load(self, session_id: str | None = None) -> dict[str, Any]:
-        self._cleanup()
+    async def _redis_save(self, client, session: dict[str, Any]) -> None:
+        await client.setex(
+            self._key(session["session_id"]),
+            SESSION_TTL_SECONDS,
+            json.dumps(session, default=str),
+        )
 
+    async def load(self, session_id: str | None = None) -> dict[str, Any]:
+        client = await self._client()
+        if client is not None:
+            try:
+                if session_id:
+                    raw = await client.get(self._key(session_id))
+                    if raw:
+                        # slide the TTL on access (matches in-memory behaviour)
+                        await client.expire(self._key(session_id), SESSION_TTL_SECONDS)
+                        return json.loads(raw)
+                session = self._make_session()
+                await self._redis_save(client, session)
+                return session
+            except Exception as exc:  # noqa: BLE001
+                print(f"[session] Redis load failed ({exc}); falling back to memory")
+
+        # in-memory path
+        self._cleanup()
         if session_id and session_id in self._sessions:
             session = self._sessions[session_id]
             session["updated_at"] = int(time.time())
             session["expires_at"] = int(time.time()) + SESSION_TTL_SECONDS
             return session
-
         session = self._make_session()
         self._sessions[session["session_id"]] = session
         return session
@@ -89,6 +163,14 @@ class SessionStore:
         session["id"] = sid
         session["updated_at"] = int(time.time())
         session["expires_at"] = int(time.time()) + SESSION_TTL_SECONDS
+
+        client = await self._client()
+        if client is not None:
+            try:
+                await self._redis_save(client, session)
+                return session
+            except Exception as exc:  # noqa: BLE001
+                print(f"[session] Redis save failed ({exc}); falling back to memory")
 
         self._sessions[sid] = session
         return session

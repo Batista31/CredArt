@@ -66,6 +66,19 @@ def _best_card(cards: list[dict]) -> dict | None:
     return max(cards, key=lambda c: CARD_FLIGHT_POINT_VALUE.get(c["card_id"], _DEFAULT_POINT_VALUE))
 
 
+def _cabin(slots: dict) -> str:
+    """Normalize the user's cabin answer ("Business", "premium economy") to a
+    Duffel cabin_class value. Defaults to economy."""
+    v = str(slots.get("cabin_class") or slots.get("cabin") or "").strip().lower()
+    if "premium" in v:
+        return "premium_economy"
+    if "business" in v:
+        return "business"
+    if "first" in v:
+        return "first"
+    return "economy"
+
+
 def _fulfillment_options() -> list[dict]:
     return [
         {"provider_id": "duffel_flight", "label": "Book flight (Duffel · live)", "path": "api",
@@ -91,7 +104,8 @@ async def search_flight_candidates(slots: dict, cards: list[dict]) -> list[Candi
     # only pass an ISO date through; free-text dates ("next weekend") let Duffel default
     depart_iso = depart if isinstance(depart, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", depart or "") else None
 
-    offers = await _duffel.search(origin, destination, depart_iso, passengers=pax)
+    offers = await _duffel.search(origin, destination, depart_iso, passengers=pax,
+                                  cabin=_cabin(slots))
     if not offers:
         return []
 
@@ -104,7 +118,9 @@ async def search_flight_candidates(slots: dict, cards: list[dict]) -> list[Candi
     candidates: list[Candidate] = []
     for i, o in enumerate(offers):
         rate = _CURRENCY_INR.get(o["currency"], 1.0)
-        inr_total = o["amount"] * rate * o["passengers"]
+        # Duffel's total_amount is the price for ALL passengers on the offer —
+        # do NOT multiply by passenger count again.
+        inr_total = o["amount"] * rate
         points_cost = int(math.ceil(inr_total / point_value))
         stops_label = "non-stop" if o["stops"] == 0 else f"{o['stops']} stop"
         candidates.append(Candidate(

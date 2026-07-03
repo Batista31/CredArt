@@ -81,12 +81,15 @@ _SLOT_QUESTIONS = {
     "topic": "What would you like me to check: benefits, fees, lounge, transfer partners, or something else?",
 }
 
-# Tap-to-answer chips shown under a slot question. Only slots with a small set of
-# natural choices get chips; free-text slots (destination, product_category…) get
-# none so the user just types. Chip text is chosen to parse cleanly on the way back
-# in (_resolve_date for dates, IATA/heuristics elsewhere).
+# Tap-to-answer chips shown under a slot question. Slots with a small set of
+# natural choices get fixed chips; truly free-text slots (product_category…) get
+# none so the user just types. Origin/destination offer popular cities as a
+# head start — typing any other city still works. Chip text is chosen to parse
+# cleanly on the way back in (_resolve_date for dates, CITY_TO_IATA elsewhere).
 _SLOT_CHIPS: dict[str, list[str]] = {
     "cabin_class": ["Economy", "Premium economy", "Business"],
+    "destination": ["Goa", "Mumbai", "Delhi", "Dubai"],
+    "origin": ["Bengaluru", "Mumbai", "Delhi"],
     "passengers": ["1", "2", "3", "4"],
     "guests": ["1", "2", "3", "4"],
     "nights": ["1 night", "2 nights", "3 nights", "A week"],
@@ -189,8 +192,15 @@ def _resolve_date(value: Any, today: _dt.date | None = None) -> str | None:
             cand = cand.replace(year=year + 1)
         return cand.isoformat()
 
-    if "weekend" in t:  # upcoming Saturday
-        days = (5 - today.weekday()) % 7 or 7
+    if "in " in t:  # "in 3 days" / "in 2 weeks"
+        m = _re.search(r"\bin\s+(\d{1,2})\s+(day|week)s?\b", t)
+        if m:
+            n = int(m.group(1)) * (7 if m.group(2) == "week" else 1)
+            return (today + _dt.timedelta(days=n)).isoformat()
+    if "weekend" in t:
+        days = (5 - today.weekday()) % 7 or 7  # upcoming Saturday
+        if "next weekend" in t:  # the Saturday after this one
+            days += 7
         return (today + _dt.timedelta(days=days)).isoformat()
     for name, wd in _WEEKDAYS.items():
         if _re.search(rf"\b{name}\b", t):
@@ -333,25 +343,76 @@ def _route_clarify_answer(text: str) -> tuple[str | None, str | None]:
     (None, None) when unparseable, so the caller falls back to a general recommendation.
     """
     t = (text or "").lower()
-    if any(w in t for w in ("flight", "fly", "airfare", "air ticket")):
+
+    def _w(*words: str) -> bool:
+        # left-word-boundary match so "great" doesn't hit "eat", "chennai" doesn't hit "hi"
+        return any(_re.search(rf"\b{_re.escape(w)}", t) for w in words)
+
+    if _w("flight", "fly", "airfare", "air ticket"):
         return ("travel_flight", None)
-    if any(w in t for w in ("hotel", "stay", "resort", "room", "accommodation")):
+    if _w("hotel", "stay", "resort", "room", "accommodation"):
         return ("travel_hotel", None)
-    if "lounge" in t:
+    if _w("lounge"):
         return ("card_benefit_lookup", "TRAVEL")
-    if any(w in t for w in ("travel", "trip", "vacation", "holiday", "getaway", "miles")):
+    if _w("travel", "trip", "vacation", "holiday", "getaway", "miles"):
         return ("card_benefit_lookup", "TRAVEL")
-    if any(w in t for w in ("dining", "dine", "food", "eat", "restaurant", "cuisine",
-                            "zomato", "swiggy", "dinner", "lunch")):
+    if _w("dining", "dine", "food", "eat", "restaurant", "cuisine",
+          "zomato", "swiggy", "dinner", "lunch"):
         return ("card_benefit_lookup", "DINING")
-    if any(w in t for w in ("shop", "buy", "purchase", "product", "gadget", "electronic",
-                            "fashion", "amazon", "voucher", "merch")):
+    if _w("shop", "buy", "purchase", "product", "gadget", "electronic",
+          "fashion", "amazon", "voucher", "merch"):
         return ("card_benefit_lookup", "SHOPPING")
-    if any(w in t for w in ("movie", "concert", "show", "event", "experience", "spa", "wellness")):
+    if _w("movie", "concert", "show", "event", "experience", "spa", "wellness"):
         return ("card_benefit_lookup", "ENTERTAINMENT")
-    if any(w in t for w in ("cashback", "cash back", "statement", "credit")):
+    if _w("cashback", "cash back", "statement", "credit"):
         return ("cashback_or_statement_credit", None)
     return (None, None)
+
+
+# Preference-weight column -> the category we'd recommend if that weight dominates.
+# (cashback is deliberately excluded — a cashback lean routes to its own journey, not a
+# category-filtered recommendation, and it's never a demo persona's top weight.)
+_LEAN_PREF_TO_CATEGORY = {
+    "travel_weight": "TRAVEL",
+    "dining_weight": "DINING",
+    "shopping_weight": "SHOPPING",
+    "experiences_weight": "ENTERTAINMENT",
+}
+_LEAN_LABEL = {"TRAVEL": "travel", "DINING": "dining",
+               "SHOPPING": "shopping", "ENTERTAINMENT": "entertainment & experiences"}
+# How strong a lean must be before we act on it WITHOUT asking. Below this we keep the
+# clarify question — personalization only pre-empts the question when the signal is real.
+_LEAN_MIN_WEIGHT = 0.35
+_LEAN_MIN_MARGIN = 0.15
+
+
+def _dominant_lean(prefs: dict | None) -> tuple[str | None, float]:
+    """The user's clearly-dominant preference category, or (None, 0.0) if none stands out.
+
+    Deterministic Layer-1 read of the stored preference weights — this is what lets a
+    vague opener ("how do I spend my points?") surface a personalized recommendation
+    with no category click. Requires both an absolute floor and a margin over the runner-up
+    so a flat/default profile falls back to asking instead of guessing.
+    """
+    if not prefs:
+        return None, 0.0
+    scored = sorted(
+        ((cat, float(prefs.get(key) or 0.0)) for key, cat in _LEAN_PREF_TO_CATEGORY.items()),
+        key=lambda kv: kv[1], reverse=True)
+    top_cat, top_w = scored[0]
+    second_w = scored[1][1] if len(scored) > 1 else 0.0
+    if top_w >= _LEAN_MIN_WEIGHT and (top_w - second_w) >= _LEAN_MIN_MARGIN:
+        return top_cat, top_w
+    return None, 0.0
+
+
+def _switch_chips(current_category: str | None) -> list[str]:
+    """The other lanes to offer as tap-chips under a leaned recommendation, so the user
+    can redirect in one tap (proves the lean is a smart default, not a lock-in)."""
+    label_of = {"TRAVEL": "Travel", "DINING": "Dining", "SHOPPING": "Shopping"}
+    base = ["Travel", "Dining", "Shopping", "Cashback"]
+    keep = label_of.get((current_category or "").upper())
+    return [c for c in base if c != keep]
 
 
 async def _llm_postcandidate_check(
@@ -414,9 +475,16 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
     # If previous turn was asking for slot fills, keep the established journey_type
     # so follow-up answers ("Mumbai, 2 people") don't re-classify the intent.
     prior_response_type = existing_state.get("response_type")
-    # Did the user just answer a clarifying "what are you leaning toward?" question?
+    # Category currently being shown via a lean/clarify route (drives switch chips + lead).
+    auto_leaned_category: str | None = None
+    switch_context_category: str | None = None
+    # Did the user just answer a clarifying "what are you leaning toward?" question — OR tap a
+    # "switch lane" chip we offered under a personalized (leaned) recommendation last turn?
     answering_clarify = (prior_response_type == "follow_up_question"
                          and (existing_state.get("missing_slots") or []) == [_CLARIFY_MARKER])
+    if (not answering_clarify and rec_state.get("awaiting_category_switch")
+            and _route_clarify_answer(message)[0]):
+        answering_clarify = True
     if answering_clarify:
         # Re-route on their answer: booking words → flight/hotel slot-filling; domain
         # words → category-filtered recommendation. Don't lock to the old clarify journey.
@@ -424,6 +492,8 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
         journey_type = routed_jt or "card_benefit_lookup"
         if routed_cat:
             intent.category = routed_cat
+        if journey_type == "card_benefit_lookup" and routed_cat:
+            switch_context_category = routed_cat
     elif prior_response_type == "follow_up_question" and existing_state.get("journey_type"):
         journey_type = existing_state["journey_type"]
     else:
@@ -480,10 +550,15 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
         if journey_type == "travel_flight":
             for field in ("origin", "destination"):
                 v = (known_slots.get(field) or "").strip()
-                if v and len(v) != 3:  # not already IATA
-                    iata = CITY_TO_IATA.get(v.lower())
-                    if iata:
-                        known_slots[field] = iata
+                if not v:
+                    continue
+                # Always try the city→IATA map first — some city names are 3 letters
+                # (e.g. "Goa" → GOI), so we can't skip the lookup on length alone.
+                iata = CITY_TO_IATA.get(v.lower())
+                if iata:
+                    known_slots[field] = iata
+                elif len(v) == 3:
+                    known_slots[field] = v.upper()  # already an IATA code
         date_slot = "departure_window" if journey_type == "travel_flight" else "check_in_window"
         # Resolve the first date-like value we can find: the current slot, other date
         # aliases, or the raw user message (a bare "next friday" reply to the dates question).
@@ -525,9 +600,32 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
             journey_type, known_slots, conv_history_dicts, intent.query or message,
             profile_defaults=profile_defaults)
 
+    # Personalization-forward opener: a vague "how do I spend my points?" with no stated
+    # category shouldn't just ask — if the user's stored preference weights show a clear
+    # lean, lead STRAIGHT into that category's recommendations (with switch chips to redirect).
+    # This proves personalization exists without the user picking a lane. A flat/default
+    # profile has no dominant lean, so it falls through to the clarify question below.
+    if (journey_type in _CLARIFY_JOURNEYS and not answering_clarify
+            and intent.category is None
+            and intent.kind not in ("greeting", "check_expiry")):
+        lean_prefs = await user_service.get_preferences(user_id) or {}
+        lean_cat, _lean_w = _dominant_lean(lean_prefs)
+        if lean_cat:
+            auto_leaned_category = lean_cat
+            switch_context_category = lean_cat
+            journey_type = "card_benefit_lookup"
+            intent.category = lean_cat
+            intent.kind = "explore_benefits"
+            intent.is_complete = True
+            known_slots["topic"] = lean_cat            # satisfy card_benefit_lookup's required slot
+            if not (intent.query or "").strip():
+                intent.query = lean_cat.lower()
+            missing_slots = _missing_slots(journey_type, known_slots)
+
     # Clarify gate: a vague/domain opener gets ONE question to pin the intent before we
     # recommend, so CredArt gathers what the user actually wants instead of guessing.
     ask_clarify = (journey_type in _CLARIFY_JOURNEYS and not answering_clarify
+                   and not auto_leaned_category
                    and intent.kind not in ("greeting", "check_expiry"))
     if ask_clarify:
         response_type = "follow_up_question"
@@ -579,15 +677,27 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
                 next_actions = ["review_recommendations", "redeem_best_option"]
                 requires_confirmation = True
             else:
-                # No product match → fall back to the bank catalogue so we still surface
-                # something real (vouchers etc.) rather than an empty list.
+                # No real product match. Be honest — don't pass unrelated vouchers off as
+                # the item the user asked for. We still surface the bank catalogue, but
+                # framed explicitly as an alternative rather than pretending it's the product.
                 legacy_candidates, trace, meta = await orchestrate(intent, user, cards)
                 candidates = legacy_candidates
                 tool_trace = [t.model_dump() for t in trace]
                 recommendations = [c.model_dump() for c in legacy_candidates]
-                response_type = "recommendation" if legacy_candidates else "general_answer"
-                assistant_message = (confirmation_recap + " " if confirmation_recap else "") + meta["reply"]
-                next_actions = ["compare_options", "redeem_best_option"] if legacy_candidates else ["clarify_goal"]
+                _term = str(search_term).strip()
+                _honest = f"I couldn't find real “{_term}” listings I can redeem your points against right now. "
+                _recap = (confirmation_recap + " ") if confirmation_recap else ""
+                if legacy_candidates:
+                    response_type = "recommendation"
+                    assistant_message = _recap + _honest + (
+                        "Here are voucher options you could put toward it instead — an Amazon or "
+                        "shopping voucher can be used to buy one directly:")
+                    next_actions = ["compare_options", "redeem_best_option"]
+                else:
+                    response_type = "general_answer"
+                    assistant_message = _recap + _honest + (
+                        "Want me to try a different product, or look at another way to use your points?")
+                    next_actions = ["clarify_goal"]
         else:
             # Real flight options (Duffel) / storefront hotel options when bookable.
             flight_cands = []
@@ -636,6 +746,17 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
                     assistant_message = (confirmation_recap + " " if confirmation_recap else "") + meta["reply"]
                     next_actions = ["compare_options", "check_transfer_partner", "redeem_best_option"] if legacy_candidates else ["clarify_goal"]
 
+    # Personalized lead-in when we leaned into a category with NO user click — makes the
+    # "we already know you" moment explicit before the recommendations.
+    if auto_leaned_category and response_type == "recommendation":
+        label = _LEAN_LABEL.get(auto_leaned_category, "your usual picks")
+        assistant_message = (
+            f"Going by your rewards profile you lean toward {label}, so I started there. "
+            + assistant_message)
+    # Only offer switch chips (and let next turn treat a lane word as a switch) when we
+    # actually showed a leaned/clarify-routed recommendation.
+    show_switch_chips = bool(switch_context_category and response_type == "recommendation")
+
     # Persist partial intent inside recommendation_state so next turn can merge it.
     intent_snapshot = intent.model_dump(exclude={"is_complete", "follow_up_question"})
     await conversation_service.upsert_state(
@@ -648,6 +769,7 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
         recommendation_state={
             "recommendations": recommendations[:3],
             "partial_intent": intent_snapshot,
+            "awaiting_category_switch": show_switch_chips,
         },
     )
     if response_type in ("recommendation", "execution_result"):
@@ -669,13 +791,16 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
         conversation_id=conversation_id,
         status="ready" if recommendations else "draft",
     )
-    # Tap-to-answer chips for the current follow-up question (clarify or slot).
+    # Tap-to-answer chips for the current follow-up question (clarify or slot); or, when we
+    # led with a personalized (leaned) recommendation, "switch lane" chips to redirect.
     suggested_replies: list[str] = []
     if response_type == "follow_up_question":
         if missing_slots == [_CLARIFY_MARKER]:
             suggested_replies = _clarify_chips(intent.category)
         elif missing_slots:
             suggested_replies = _SLOT_CHIPS.get(missing_slots[0], [])
+    elif show_switch_chips:
+        suggested_replies = _switch_chips(switch_context_category)
     return {
         "conversation_id": str(conversation_id) if conversation_id is not None else None,
         "message": assistant_message,

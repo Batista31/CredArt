@@ -34,6 +34,36 @@ _AMAZON_KEY = (
 )
 
 
+def _clean_query(query: str) -> str:
+    """Reduce a free-text ask to the concrete product noun we recognize.
+
+    Reuses the same intent keyword list that classifies "buy a cooker" as a product
+    purchase (`intent._PRODUCT_WORDS`). Open product APIs (dummyjson today) do AND-token
+    matching, so a full phrase like "a coffee maker for my kitchen under 10000" matches
+    nothing and we'd fall back to unrelated vouchers. Searching the recognized noun
+    ("coffee maker") returns real, relevant products — or a clean empty result the
+    caller can be honest about, instead of invalid data from stray words.
+
+    Falls back to the stripped raw query when no product noun is recognized.
+    """
+    q = (query or "").lower()
+    if not q.strip():
+        return ""
+    from api.intent import _PRODUCT_WORDS
+    # Longest phrase first so "washing machine" wins over a bare "machine", and
+    # generic catch-alls ("product", "gadget", "appliance") only win if nothing
+    # more specific is present.
+    _generic = {"product", "merchandise", "gadget", "appliance"}
+    specific = [w for w in _PRODUCT_WORDS if w not in _generic]
+    for w in sorted(specific, key=len, reverse=True):
+        if w in q:
+            return w
+    for w in _generic:
+        if w in q:
+            return w
+    return query.strip()
+
+
 def _best_voucher_card(cards: list[dict]) -> dict | None:
     if not cards:
         return None
@@ -76,7 +106,8 @@ async def search_merchandise_candidates(query: str, cards: list[dict], limit: in
     query = (query or "").strip()
     if not query:
         return []
-    products = await _search_products(query, limit)
+    search_q = _clean_query(query)
+    products = await _search_products(search_q, limit)
     if not products:
         return []
     card = _best_voucher_card(cards)

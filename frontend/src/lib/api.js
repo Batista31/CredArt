@@ -44,6 +44,9 @@ export const api = {
       conversation_id: conversationId || undefined,
     }),
 
+  conversations: (userId = ACTIVE_USER_ID) => jget(`/conversations?user_id=${userId}`),
+  conversation: (id, userId = ACTIVE_USER_ID) => jget(`/conversations/${id}?user_id=${userId}`),
+
   redeem: ({ sessionId, candidateId, providerId, mode, consent, userId = ACTIVE_USER_ID }) =>
     jpost("/redeem", {
       user_id: userId, session_id: sessionId, candidate_id: candidateId,
@@ -58,4 +61,19 @@ export const api = {
 
   bookingSession: (id) => jget(`/booking-sessions/${id}`),
   submitOtp: (id, otp) => jpost(`/booking-sessions/${id}/otp`, { otp }),
+
+  /* --- Food & Dining concierge (Subway). Self-contained backend router;
+     no user_id needed (backend uses its own demo user). --- */
+  diningHealth: () => jget("/dining/health"),
+  diningChat: (message, sessionId) =>
+    jpost("/dining/chat", { message, session_id: sessionId || undefined }),
+  diningRedeem: ({ sessionId, candidateId }) =>
+    jpost("/dining/redeem", { session_id: sessionId, candidate_id: candidateId }),
+
+  /* --- Entertainment & Cinema concierge (TMDB + hardcoded rewards). --- */
+  entHealth: () => jget("/entertainment/health"),
+  entChat: (message, sessionId) =>
+    jpost("/entertainment/chat", { message, session_id: sessionId || undefined }),
+  entRedeem: ({ sessionId, candidateId }) =>
+    jpost("/entertainment/redeem", { session_id: sessionId, candidate_id: candidateId }),
 };

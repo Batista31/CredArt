@@ -34,6 +34,9 @@ class TangoProvider(RedemptionProvider):
     path = "api"
     mode = "live"
     currency = "points"
+    # Production voucher issuance goes through a bank OTP step-up before any points
+    # move (demo mode uses the demo provider and stays instant).
+    requires_otp = True
 
     def __init__(self) -> None:
         self.user = os.getenv("TANGO_API_USER", "")
