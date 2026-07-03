@@ -202,6 +202,7 @@ export function Confirm({ booking, mode, onDone, onBackToChat }) {
             amount: s.amount, last4: s.card_last4,
             secondsLeft: s.otp_deadline ? Math.max(10, Math.round(s.otp_deadline - Date.now() / 1000)) : 150,
           };
+        } catch { /* use fallback ctx */ }
         if (mountedRef.current) { setOtpCtx(ctx); setPhase("otp"); }
       } else if (res.status === "completed") {
         setResult(res);
