@@ -25,7 +25,9 @@ class DuffelProvider(RedemptionProvider):
     path = "api"
     mode = "live"
     currency = "points"
-    requires_otp = False
+    # Production flight bookings go through a bank OTP step-up before any points move
+    # (demo mode uses the demo provider and stays instant).
+    requires_otp = True
 
     def __init__(self) -> None:
         self.token = os.getenv("DUFFEL_API_KEY", "")
@@ -147,11 +149,21 @@ class DuffelProvider(RedemptionProvider):
                 if not offers:
                     return BookingResult(ok=False, error="no live offers for this route right now",
                                          steps=[{"label": "Searching flights", "status": "failed", "detail": f"{origin}->{destination}"}])
-                # Try the shown airline first, then cheapest others. Some sandbox/GDS offers
-                # report "no longer available" at order time, so we retry across offers —
-                # exactly how a real booking agent handles transient availability.
+                # Try the shown airline first, then the cheapest offer of EACH other
+                # airline. Sandbox/GDS offers often fail at order time per-carrier
+                # (e.g. every Air India offer returns price_changed), so retrying six
+                # same-carrier offers goes nowhere — diversifying across airlines is
+                # how a real booking agent handles it.
                 want = meta.get("airline")
-                ordered = sorted(offers, key=lambda o: (o["owner"]["name"] != want, float(o.get("total_amount") or 1e9)))
+                cheapest_first = sorted(offers, key=lambda o: float(o.get("total_amount") or 1e9))
+                by_owner: dict[str, list[dict]] = {}
+                for o in cheapest_first:
+                    by_owner.setdefault(o["owner"]["name"], []).append(o)
+                ordered = []
+                if want in by_owner:
+                    ordered.append(by_owner[want][0])
+                ordered += [ol[0] for owner, ol in by_owner.items() if owner != want]
+                ordered += [ol[1] for ol in by_owner.values() if len(ol) > 1]
                 steps.append({"label": "Searching flights", "status": "done",
                               "detail": f"{ordered[0]['owner']['name']} {origin}->{destination} {ordered[0]['total_amount']} {ordered[0]['total_currency']}"})
 
@@ -159,6 +171,7 @@ class DuffelProvider(RedemptionProvider):
                 base_family = traveler.get("family_name", "Sharma")
                 _co = ["", "Vivaan", "Anaya", "Aarav", "Diya", "Kabir"]
                 last_err = "no bookable offer"
+                hard_stop = False
                 for offer in ordered[:6]:
                     # distinct names — airlines reject duplicate passenger names
                     passengers_payload = []
@@ -172,29 +185,55 @@ class DuffelProvider(RedemptionProvider):
                             "email": traveler.get("email", "riya@example.com"),
                             "phone_number": traveler.get("phone", "+919000000000"),
                         })
-                    resp = await client.post(
-                        f"{_BASE}/air/orders", headers=self._headers(),
-                        json={"data": {
-                            "type": "instant",
-                            "selected_offers": [offer["id"]],
-                            "passengers": passengers_payload,
-                            "payments": [{"type": "balance", "amount": offer["total_amount"], "currency": offer["total_currency"]}],
-                        }},
-                    )
-                    if resp.status_code in (200, 201):
-                        order = resp.json()["data"]
-                        ref = order.get("booking_reference") or order.get("id")
-                        steps.append({"label": "Booking flight", "status": "done", "detail": f"{offer['owner']['name']} · {ref}"})
-                        steps.append({"label": "Sending confirmation", "status": "done", "detail": ref})
-                        return BookingResult(ok=True, confirmation_reference=ref, steps=steps,
-                                             raw={"order_id": order.get("id")})
-                    try:
-                        errs = resp.json().get("errors", [])
-                        last_err = (errs[0].get("title") if errs else f"HTTP {resp.status_code}")
-                    except Exception:
-                        last_err = f"HTTP {resp.status_code}"
-                    # transient availability → try next offer; other errors → stop
-                    if not any((e.get("code") in ("offer_no_longer_available", "offer_request_already_actioned")) for e in (errs or [])):
+                    pay_amount = offer["total_amount"]
+                    pay_currency = offer["total_currency"]
+                    for attempt in range(3):  # same-offer retries for transient errors
+                        resp = await client.post(
+                            f"{_BASE}/air/orders", headers=self._headers(),
+                            json={"data": {
+                                "type": "instant",
+                                "selected_offers": [offer["id"]],
+                                "passengers": passengers_payload,
+                                "payments": [{"type": "balance", "amount": pay_amount, "currency": pay_currency}],
+                            }},
+                        )
+                        if resp.status_code in (200, 201):
+                            order = resp.json()["data"]
+                            ref = order.get("booking_reference") or order.get("id")
+                            steps.append({"label": "Booking flight", "status": "done", "detail": f"{offer['owner']['name']} · {ref}"})
+                            steps.append({"label": "Sending confirmation", "status": "done", "detail": ref})
+                            return BookingResult(ok=True, confirmation_reference=ref, steps=steps,
+                                                 raw={"order_id": order.get("id")})
+                        try:
+                            errs = resp.json().get("errors", [])
+                            last_err = (errs[0].get("title") if errs else f"HTTP {resp.status_code}")
+                        except Exception:
+                            errs = []
+                            last_err = f"HTTP {resp.status_code}"
+                        codes = {e.get("code") for e in (errs or [])}
+                        # sandbox blips (503 service_unavailable) → brief backoff, same offer
+                        if resp.status_code >= 500 or "service_unavailable" in codes:
+                            import asyncio
+                            await asyncio.sleep(2)
+                            continue
+                        # airline repriced the offer → fetch its current price, retry
+                        # once; if it still won't book, move on to the next airline
+                        if "price_changed" in codes or "price" in (last_err or "").lower():
+                            if attempt == 0:
+                                r2 = await client.get(f"{_BASE}/air/offers/{offer['id']}", headers=self._headers())
+                                fresh = (r2.json().get("data") or {}) if r2.status_code == 200 else {}
+                                if fresh.get("total_amount"):
+                                    pay_amount = fresh["total_amount"]
+                                    pay_currency = fresh.get("total_currency") or pay_currency
+                                    continue
+                            break
+                        # offer gone → move on to the next offer
+                        if codes & {"offer_no_longer_available", "offer_request_already_actioned",
+                                    "offer_request_already_booked"}:
+                            break
+                        hard_stop = True  # validation/auth error — retrying won't help
+                        break
+                    if hard_stop:
                         break
                 steps.append({"label": "Booking flight", "status": "failed", "detail": last_err})
                 return BookingResult(ok=False, error=last_err, steps=steps)

@@ -95,7 +95,7 @@ async def next_context_question(
         "history": (history or [])[-6:],
     }, default=str)
     try:
-        raw, _ = await _llm_call(_SYSTEM, payload)
+        raw, _ = await _llm_call(_SYSTEM, payload, json_mode=True)
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         parsed = json.loads(raw)
         return {

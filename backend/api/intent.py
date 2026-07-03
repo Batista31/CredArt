@@ -54,8 +54,6 @@ def _city_to_iata(v: str) -> str | None:
     return CITY_TO_IATA.get(v.lower())
 
 
-_ALWAYS_COMPLETE = {"greeting", "check_expiry", "unknown"}
-
 _SLOT_PATTERNS = {
     "style": ["cozy", "modern", "luxury", "minimal", "functional"],
     "room_type": ["living room", "bedroom", "kitchen", "office"],
@@ -78,7 +76,14 @@ _HOME_PRODUCTS = [
 
 
 def _match(text: str, words: list[str]) -> bool:
-    return any(w in text for w in words)
+    """Left-word-boundary match: "expir" still catches "expiring", but "eat"
+    no longer matches "seat" and "hi" no longer matches "chennai"/"delhi"."""
+    return any(re.search(rf"\b{re.escape(w)}", text) for w in words)
+
+
+def _match_word(text: str, words: list[str]) -> bool:
+    """Full-word match — for greetings, where "hi" must not catch "high"."""
+    return any(re.search(rf"\b{re.escape(w)}\b", text) for w in words)
 
 
 async def extract_intent(
@@ -127,17 +132,12 @@ async def extract_intent(
             if prod and merged.get("journey_type") in ("product_purchase", "merchandise_purchase", "gift_purchase"):
                 merged.setdefault("slots", {})
                 merged["slots"].setdefault("product_category", prod)
-            is_complete = True
-            follow_up_question = None
-            if merged.get("kind") not in _ALWAYS_COMPLETE:
-                try:
-                    from services.llm_service import llm_check_completeness
-                    is_complete, follow_up_question = await llm_check_completeness(
-                        merged, conversation_history or []
-                    )
-                except Exception as e:
-                    print(f"[intent] completeness check failed ({e}), treating as complete")
-            return Intent(**merged, is_complete=is_complete, follow_up_question=follow_up_question)
+            # Completeness is owned by the dialogue manager (clarify gate, static
+            # slot-filling, planner, and the post-candidate LLM check). Running a
+            # second LLM completeness round here added a blocking round-trip to
+            # EVERY turn and could surface a chip-less "tell me more" dead-end via
+            # orchestrate's early return — so intents extract as complete.
+            return Intent(**merged, is_complete=True, follow_up_question=None)
         except Exception:
             pass  # fall through to heuristic
 
@@ -146,7 +146,7 @@ async def extract_intent(
     category = next((cat for cat, hints in _CATEGORY_HINTS.items() if _match(text, hints)), None)
     urgency = _match(text, _EXPIRY)
 
-    if not text or (len(text) <= 12 and _match(text, _GREETING)):
+    if not text or (len(text) <= 12 and _match_word(text, _GREETING)):
         kind = "greeting"
     elif urgency:
         kind = "check_expiry"
