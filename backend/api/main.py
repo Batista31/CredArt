@@ -113,7 +113,7 @@ async def chat(req: ChatRequest):
     intent = concierge["intent"]
     candidates = concierge["candidates"]
     trace = concierge["tool_trace"]
-    meta = {"reply": concierge["message"], "llm_used": concierge["claude_used"]}
+    meta = {"reply": concierge["message"], "llm_used": concierge["llm_used"]}
 
     if candidates:
         await scoring_service.log_recommendation_events(
@@ -126,7 +126,7 @@ async def chat(req: ChatRequest):
         candidates=candidates,
         reply=meta["reply"],
         tool_trace=trace,
-        claude_used=meta.get("llm_used", False),
+        llm_used=meta.get("llm_used", False),
         conversation_id=concierge["conversation_id"],
         message=concierge["message"],
         response_type=concierge["response_type"],

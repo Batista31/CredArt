@@ -8,7 +8,7 @@ and assembles a `Candidate` list with deterministic flags (affordability,
 expiry urgency). It NEVER invents values.
 
 Phase 5 produces a templated reply. Phase 7 will pass this exact candidate set
-to Claude for reranking + natural-language explanation; Claude sees only this,
+to the LLM for reranking + natural-language explanation; the LLM sees only this,
 never the DB.
 """
 

@@ -54,14 +54,14 @@ search — the only tool that calls an embedding provider.
 is derived from real data — no invented ₹ figures; the score is an internal
 ranking signal, not shown to the user as a value. The `/chat` handler logs the
 top candidates to `recommendation_events` (the preference-learning signal;
-`user_action` filled later when the user acts). Phase 7 (Claude) reranks/
+`user_action` filled later when the user acts). Phase 7 (the LLM) reranks/
 explains these — it never recomputes the score and never sees the DB.
 
 ## Phase 5 — FastAPI orchestration backend
 
 The orchestration layer (port 8001) that turns a chat message into a
 **pre-validated candidate set** + reply. It wires Layer 1 (deterministic
-services + SMS-sourced user data) and leaves a clean seam for Claude (Phase 7),
+services + SMS-sourced user data) and leaves a clean seam for the LLM (Phase 7),
 which will receive ONLY this candidate set — never the DB.
 
 `api/` package:
@@ -69,7 +69,7 @@ which will receive ONLY this candidate set — never the DB.
 - `schemas.py` — Pydantic models (Intent, Candidate, ToolCall, ChatResponse)
 - `session.py` — conversation store: in-memory, auto-upgrades to Redis if
   `REDIS_URL` is set
-- `intent.py` — deterministic NLU → `Intent` (Phase 7 can swap in Claude)
+- `intent.py` — deterministic NLU → `Intent` (Phase 7 can swap in the LLM)
 - `orchestrator.py` — intent → Layer 1 candidate assembly + `tool_trace`
   (affordability + expiry flags computed deterministically; no invented values)
 
@@ -86,8 +86,8 @@ Endpoints:
 
 Note: the orchestrator calls the same Layer 1 services the MCP server wraps
 (in-process), so the backend runs standalone. The MCP server remains the
-external card-level interface. `claude_used` in the response is `false` until
-Phase 7 wires Claude reranking.
+external card-level interface. `llm_used` in the response is `false` until
+Phase 7 wires LLM reranking.
 
 ## Phase 4 — SMS parser (user data)
 

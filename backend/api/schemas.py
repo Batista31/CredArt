@@ -116,7 +116,7 @@ class ChatResponse(BaseModel):
     candidates: list[Candidate]
     reply: str
     tool_trace: list[ToolCall]
-    claude_used: bool = False
+    llm_used: bool = False
     conversation_id: Optional[str] = None
     message: str = ""
     response_type: ResponseType = "general_answer"

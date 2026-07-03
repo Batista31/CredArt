@@ -1000,6 +1000,6 @@ async def generate_concierge_response(
         "intent": intent,
         "candidates": candidates,
         "tool_trace": tool_trace,
-        "claude_used": False,
+        "llm_used": False,
         "recommendation_session_id": str(rec_session["id"]) if rec_session.get("id") else None,
     }

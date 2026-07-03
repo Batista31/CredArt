@@ -151,7 +151,7 @@ async def _finalize(txn_id, user_id, candidate, provider, traveler, mode, row) -
 
     # Pre-booking points lock — stop two concurrent redemptions from double-spending
     # REAL points. Demo redemptions spend a separate demo_points bucket and are meant
-    # to be replayable (see CLAUDE.md), so they never take the lock.
+    # to be replayable (see db/reset_demo.sql), so they never take the lock.
     lock_client = None if is_demo else _lock_client()
     lock_key = f"credart:lock:{user_id}:{card_id}"
     if lock_client is not None:
