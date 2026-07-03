@@ -2,8 +2,8 @@
 
 The CMR is the single unified profile CredArt keeps about a user beyond their
 cards and points: extended preferences (preferred airlines/hotels/cuisines,
-dietary restrictions, family size), saved delivery addresses, a wishlist of
-benefits they liked, and a list of dismissed benefits they rejected.
+dietary restrictions), saved delivery addresses, a wishlist of benefits they
+liked, and a list of dismissed benefits they rejected.
 
 This is OUR data (like user_service) — sourced from the user, never from the
 bank MCP server, and deliberately NOT an MCP tool. It feeds DETERMINISTIC
@@ -151,7 +151,7 @@ async def add_dismissed(user_id: str, label: str, card_id: str | None = None) ->
 def is_physical_goods(candidate: dict) -> bool:
     """True if this candidate is a physical product that must be shipped.
     Transfers, perks and expiry nudges are never physical."""
-    if candidate.get("kind") != "redemption":
+    if candidate.get("kind") not in ("redemption", "merchandise"):
         return False
     category = (candidate.get("category") or "").upper()
     if category == "SHOPPING":
@@ -185,21 +185,12 @@ def preference_boost(candidate, prefs: dict, wishlist_labels: set[str]) -> float
 
 def prefill_note(prefs: dict, intent) -> str | None:
     """A short, DETERMINISTIC sentence confirming pre-filled CMR values, so the
-    assistant doesn't re-ask questions the profile already answers (party size,
-    dietary needs). Appended to the reply OUTSIDE the LLM — the LLM never sees
-    CMR data."""
+    assistant doesn't re-ask questions the profile already answers (dietary needs).
+    Appended to the reply OUTSIDE the LLM — the LLM never sees CMR data."""
     if not prefs:
         return None
     category = (getattr(intent, "category", None) or "").upper()
-    kind = getattr(intent, "kind", "")
     bits: list[str] = []
-
-    family_size = prefs.get("family_size")
-    if (category == "TRAVEL" or kind == "transfer") and family_size:
-        if family_size == 1:
-            bits.append("booked for just you")
-        else:
-            bits.append(f"assuming your usual party of {family_size}")
 
     dietary = prefs.get("dietary_restrictions") or []
     if category == "DINING" and dietary:

@@ -1,176 +1,79 @@
+/* CredArt — root router.
+ *
+ * Landing page → pick a category → that category's themed concierge. The theme
+ * (navy+gold / green+yellow / purple+red) is applied by overriding the global
+ * `--brand-*` CSS scale on a wrapper div, so each experience re-themes wholesale
+ * with zero changes to the components inside it.
+ *
+ *   bank          → the original HDFC concierge (BankExperience), unchanged
+ *   dining / ent. → the new themed CategoryChat, wired to the new backend routers
+ *
+ * A global laptop ⇄ mobile toggle re-renders the whole app inside a phone frame
+ * (IOSDevice); every experience accepts a `view` prop and lays itself out to fit.
+ */
 import React from "react";
-import { api } from "./lib/api.js";
+import { THEMES } from "./theme.jsx";
+import { Landing } from "./components/Landing.jsx";
+import { BankExperience } from "./components/BankExperience.jsx";
+import { CategoryChat } from "./components/CategoryChat.jsx";
 import { IOSDevice } from "./components/IOSDevice.jsx";
-import { Dashboard } from "./components/Dashboard.jsx";
-import { Concierge } from "./components/Concierge.jsx";
-import { Confirm } from "./components/Confirm.jsx";
-import { ChatHistory } from "./components/ChatHistory.jsx";
-import { BankBadge, ModeBadge } from "./components/mode.jsx";
 
-const fmt = (n) => (n == null ? "0" : Number(n).toLocaleString());
-
-/* ---------- Settings bottom sheet ---------- */
-function Settings({ mode, setMode, onClose }) {
+/* Floating laptop / mobile switch — fixed top-right, visible on every screen. */
+function ViewToggle({ view, onChange }) {
+  const seg = (key, label, icon) => {
+    const active = view === key;
+    return (
+      <button className="tap" onClick={() => onChange(key)} title={`${label} view`} style={{
+        display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 999,
+        border: "none", cursor: "pointer", fontFamily: "var(--font)", fontSize: 12.5, fontWeight: 800,
+        background: active ? "#fff" : "transparent", color: active ? "#1C1330" : "rgba(255,255,255,0.8)",
+        boxShadow: active ? "0 2px 8px rgba(0,0,0,0.18)" : "none", transition: "background .15s ease",
+      }}>
+        {icon}{label}
+      </button>
+    );
+  };
   return (
-    <div style={{ position: "absolute", inset: 0, zIndex: 90, background: "rgba(20,10,40,0.45)", display: "flex", alignItems: "flex-end", animation: "fadeIn .2s ease" }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", background: "#fff", borderRadius: "24px 24px 0 0", padding: "22px 20px 34px", animation: "sheetUp .3s cubic-bezier(.2,.8,.2,1)" }}>
-        <div style={{ width: 40, height: 4, borderRadius: 99, background: "var(--hairline)", margin: "0 auto 18px" }} />
-        <div style={{ fontSize: 17, fontWeight: 800, color: "var(--ink)" }}>Execution mode</div>
-        <div style={{ fontSize: 12.5, color: "var(--ink-3)", marginTop: 4 }}>
-          Demo rehearses redemptions with no real money. Production uses real points and a bank OTP step.
-        </div>
-        <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-          {["demo", "production"].map((m) => (
-            <button key={m} className="tap" onClick={() => setMode(m)} style={{
-              flex: 1, padding: "13px", borderRadius: "var(--r-md)", fontFamily: "var(--font)", fontSize: 14, fontWeight: 800, cursor: "pointer",
-              border: mode === m ? "2px solid var(--brand-500)" : "1.5px solid var(--hairline)",
-              background: mode === m ? "var(--brand-50)" : "#fff", color: mode === m ? "var(--brand-700)" : "var(--ink-3)" }}>
-              {m === "demo" ? "Demo" : "Production"}
-            </button>
-          ))}
-        </div>
-        <button className="tap" onClick={onClose} style={{ width: "100%", marginTop: 18, padding: 14, border: "none", borderRadius: "var(--r-md)",
-          background: "linear-gradient(135deg,var(--brand-600),var(--brand-700))", color: "#fff", fontFamily: "var(--font)", fontSize: 15, fontWeight: 800, cursor: "pointer" }}>
-          Done
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/* ---------- T&C bottom sheet ---------- */
-function Tnc({ card, onClose }) {
-  return (
-    <div style={{ position: "absolute", inset: 0, zIndex: 90, background: "rgba(20,10,40,0.45)", display: "flex", alignItems: "flex-end", animation: "fadeIn .2s ease" }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", background: "#fff", borderRadius: "24px 24px 0 0", padding: "22px 20px 34px", animation: "sheetUp .3s cubic-bezier(.2,.8,.2,1)" }}>
-        <div style={{ width: 40, height: 4, borderRadius: 99, background: "var(--hairline)", margin: "0 auto 18px" }} />
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ width: 38, height: 38, borderRadius: 11, background: "var(--brand-100)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5c0 4.4-3 8.3-7 9.5C8 19.3 5 15.4 5 11V6l7-3z" stroke="var(--brand-600)" strokeWidth="1.7" strokeLinejoin="round"/><path d="M9 11.5l2 2 4-4" stroke="var(--brand-600)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          </span>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 800, color: "var(--ink)" }}>{card.card_name} · Terms</div>
-            <div style={{ fontSize: 12, color: "var(--ink-3)" }}>Every benefit CredArt shows is source-verified</div>
-          </div>
-        </div>
-        <div style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.5, marginTop: 14 }}>
-          CredArt never invents points values or availability. Redemption rules, point costs and caveats are read live from
-          the HDFC catalogue and your own balance — the assistant only ever sees pre-validated options.
-        </div>
-        <a href="https://www.hdfcbank.com/personal/pay/cards/credit-cards" target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
-          <div className="tap" style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 10, padding: "13px 14px", background: "var(--brand-50)",
-            border: "1px solid var(--hairline)", borderRadius: "var(--r-sm)" }}>
-            <span style={{ flex: 1, fontSize: 13.5, fontWeight: 700, color: "var(--ink)" }}>Verify on HDFC official</span>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M7 17L17 7M17 7H8M17 7v9" stroke="var(--brand-600)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          </div>
-        </a>
-        <button className="tap" onClick={onClose} style={{ width: "100%", marginTop: 16, padding: 14, border: "none", borderRadius: "var(--r-md)",
-          background: "linear-gradient(135deg,var(--brand-600),var(--brand-700))", color: "#fff", fontFamily: "var(--font)", fontSize: 15, fontWeight: 800, cursor: "pointer" }}>
-          Close
-        </button>
-      </div>
+    <div style={{ position: "fixed", top: 16, right: 16, zIndex: 200, display: "inline-flex", gap: 2,
+      padding: 3, borderRadius: 999, background: "rgba(18,10,38,0.72)", backdropFilter: "blur(8px)",
+      border: "1px solid rgba(255,255,255,0.16)", boxShadow: "0 8px 24px rgba(0,0,0,0.3)" }}>
+      {seg("laptop", "Laptop",
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="12" rx="2" stroke="currentColor" strokeWidth="1.9" /><path d="M2 20h20" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" /></svg>)}
+      {seg("mobile", "Mobile",
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="7" y="2" width="10" height="20" rx="2.5" stroke="currentColor" strokeWidth="1.9" /><path d="M11 18.5h2" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" /></svg>)}
     </div>
   );
 }
 
 export default function App() {
-  const [screen, setScreen] = React.useState("dashboard");
-  const [dir, setDir] = React.useState("fwd");
-  const [mode, setMode] = React.useState("demo");
-  const [user, setUser] = React.useState(null);
-  const [cards, setCards] = React.useState([]);
-  const [wishlistLabels, setWishlistLabels] = React.useState(new Set());
-  const [dismissedLabels, setDismissedLabels] = React.useState(new Set());
-  const [chatCard, setChatCard] = React.useState(null);
-  const [resumeConvoId, setResumeConvoId] = React.useState(null);
-  const [booking, setBooking] = React.useState(null);
-  const [showSettings, setShowSettings] = React.useState(false);
-  const [tncCard, setTncCard] = React.useState(null);
+  const [category, setCategory] = React.useState(null);
+  const [view, setView] = React.useState("laptop");
+  const mobile = view === "mobile";
+  const back = () => setCategory(null);
 
-  const loaded = React.useRef(false);
-  React.useEffect(() => {
-    if (loaded.current) return;
-    loaded.current = true;
-    refreshCards();
-    api.cmr().then((d) => {
-      setWishlistLabels(new Set((d.wishlist || []).map((w) => w.label)));
-      setDismissedLabels(new Set((d.dismissed || []).map((w) => w.label)));
-    }).catch(() => {});
-  }, []);
-
-  function refreshCards() {
-    api.cards().then((d) => { setUser(d.user); setCards(d.cards || []); }).catch(() => {});
-  }
-
-  const go = (s, d = "fwd") => { setDir(d); setScreen(s); };
-  const openChat = (card) => { setChatCard(card); setResumeConvoId(null); go("chat"); };
-  const openHistory = () => go("history");
-  const openConversation = (convo) => {
-    // History doesn't record which card a conversation was scoped to, so resume
-    // without forcing one — the backend already knows the card from known_slots
-    // (preferred_card_id) if the user switched mid-conversation.
-    setChatCard(null);
-    setResumeConvoId(convo.id);
-    go("chat");
-  };
-  const onRedeem = (candidate, option, sessionId) => { setBooking({ candidate, option, sessionId }); go("confirm"); };
-
-  async function handleWishlist(cand) {
-    try { await api.wishlist(cand.label, cand.card_id); setWishlistLabels((p) => new Set([...p, cand.label])); } catch { /* silent */ }
-  }
-  async function handleDismiss(cand) {
-    try { await api.dismiss(cand.label, cand.card_id); setDismissedLabels((p) => new Set([...p, cand.label])); } catch { /* silent */ }
-  }
-
-  const totalPts = cards.reduce((a, c) => a + (c.current_points || 0), 0);
-  const demoPts = cards.reduce((a, c) => a + (c.demo_points || 0), 0);
-  const screenKey = screen + (booking ? "1" : "0") + (chatCard ? chatCard.user_card_id : "") + (resumeConvoId || "");
+  const content = !category ? (
+    <Landing view={view} onPick={setCategory} />
+  ) : (
+    // Theme wrapper: the vars cascade to every child (including the bank chat).
+    // key={category} guarantees a clean remount (and fresh state) per category.
+    <div key={category} style={{
+      minHeight: mobile ? "100%" : "100vh", height: mobile ? "100%" : undefined,
+      background: THEMES[category].outerBg, ...THEMES[category].vars }}>
+      {category === "bank"
+        ? <BankExperience view={view} onBack={back} />
+        : <CategoryChat theme={THEMES[category]} view={view} onBack={back} />}
+    </div>
+  );
 
   return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
-      background: "radial-gradient(circle at 30% 20%, #efeaf8, #e3ddf0)", padding: 20, gap: 40, flexWrap: "wrap" }}>
-      <div style={{ maxWidth: 360, color: "var(--ink)" }} className="cr-desktop-pitch">
-        <BankBadge />
-        <h1 style={{ fontFamily: "var(--font)", fontSize: 34, fontWeight: 800, lineHeight: 1.1, margin: "20px 0 10px" }}>
-          Your points,<br />finally spent well.
-        </h1>
-        <p style={{ fontFamily: "var(--font)", color: "var(--ink-2)", fontSize: 15, lineHeight: 1.5 }}>
-          CredArt is an AI rewards concierge. It reads your HDFC cards, finds the best redemption, and books it in one click —
-          demo credits to rehearse, real points + bank OTP to go live.
-        </p>
-        <div style={{ marginTop: 14, fontSize: 13, color: "var(--ink-3)" }}>
-          Balance: <b className="num">{fmt(totalPts)}</b> pts · <b className="num">{fmt(demoPts)}</b> demo
+    <>
+      <ViewToggle view={view} onChange={setView} />
+      {mobile ? (
+        <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+          padding: "26px 12px", background: "radial-gradient(circle at 30% 18%, #241246, #120726 60%, #0a0416)" }}>
+          <IOSDevice dark>{content}</IOSDevice>
         </div>
-        <div style={{ marginTop: 16 }}><ModeBadge mode={mode} dark={false} onClick={() => setShowSettings(true)} /></div>
-      </div>
-
-      <IOSDevice dark>
-        <div key={screenKey} style={{ height: "100%", animation: `${dir === "fwd" ? "screenIn" : "screenInBack"} .34s cubic-bezier(.2,.8,.2,1)` }}>
-          {screen === "dashboard" && (
-            <Dashboard user={user} cards={cards} mode={mode}
-              onOpenChat={openChat} onOpenSettings={() => setShowSettings(true)} onOpenTnc={setTncCard}
-              onOpenHistory={openHistory} />
-          )}
-          {screen === "history" && (
-            <ChatHistory user={user} onBack={() => go("dashboard", "back")} onOpenConversation={openConversation} />
-          )}
-          {screen === "chat" && (
-            <Concierge user={user} card={chatCard} mode={mode} resumeConversationId={resumeConvoId}
-              onBack={() => { setResumeConvoId(null); go(resumeConvoId ? "history" : "dashboard", "back"); }}
-              onRedeem={onRedeem}
-              wishlistLabels={wishlistLabels} dismissedLabels={dismissedLabels}
-              onWishlist={handleWishlist} onDismiss={handleDismiss} />
-          )}
-          {screen === "confirm" && booking && (
-            <Confirm booking={booking} mode={mode}
-              onDone={() => { setBooking(null); refreshCards(); go("dashboard", "back"); }}
-              onBackToChat={() => { setBooking(null); go("chat", "back"); }} />
-          )}
-        </div>
-
-        {showSettings && <Settings mode={mode} setMode={setMode} onClose={() => setShowSettings(false)} />}
-        {tncCard && <Tnc card={tncCard} onClose={() => setTncCard(null)} />}
-      </IOSDevice>
-    </div>
+      ) : content}
+    </>
   );
 }

@@ -34,6 +34,8 @@ from services.redemption.executor import start_redemption, submit_otp
 
 from .conversation import resume_conversation
 from .dialogue_manager import generate_concierge_response
+from .dining import router as dining_router
+from .entertainment import router as entertainment_router
 from .intent import extract_intent
 from .orchestrator import orchestrate
 from .schemas import (
@@ -61,7 +63,9 @@ store = SessionStore()
 async def lifespan(app: FastAPI):
     await db.get_pool()
     await bank_mcp_client.startup()
+    await store.startup()
     yield
+    await store.shutdown()
     await bank_mcp_client.shutdown()
     await db.close_pool()
 
@@ -73,6 +77,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Food & Dining rewards concierge (Subway demo client) — self-contained router,
+# mounted at /dining. Additive only: it shares no state with the bank routes.
+app.include_router(dining_router)
+
+# Entertainment & Cinema rewards concierge (TMDB now-playing + hardcoded rewards)
+# — self-contained router at /entertainment. Additive only; shares no bank state.
+app.include_router(entertainment_router)
 
 
 @app.get("/health")
@@ -125,6 +137,7 @@ async def chat(req: ChatRequest):
         requires_confirmation=concierge["requires_confirmation"],
         memory_updates=concierge["memory_updates"],
         next_actions=concierge["next_actions"],
+        suggested_replies=concierge.get("suggested_replies", []),
     )
     await store.append_turn(session, "assistant", resp.reply)
     dumps = [c.model_dump() for c in candidates]

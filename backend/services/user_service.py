@@ -53,8 +53,62 @@ async def get_preferences(user_id: str) -> dict | None:
                experiences_weight, value_sensitivity_threshold,
                total_redemptions, total_dismissals,
                preferred_airlines, preferred_hotel_chains, preferred_cuisines,
-               dietary_restrictions, family_size
+               dietary_restrictions
           FROM preferences WHERE user_id = $1
         """,
         user_id,
     )
+
+
+async def update_preferences_after_redemption(user_id: str, category: str | None) -> None:
+    """Dynamically adjust user preference weights after a confirmed redemption."""
+    prefs = await get_preferences(user_id)
+    if not prefs:
+        return
+
+    category_to_pref = {
+        "TRAVEL": "travel_weight",
+        "DINING": "dining_weight",
+        "SHOPPING": "shopping_weight",
+        "ENTERTAINMENT": "experiences_weight",
+        "WELLNESS": "experiences_weight",
+        "MILESTONE": "cashback_weight",
+    }
+    pref_keys = ["travel_weight", "dining_weight", "shopping_weight", "cashback_weight", "experiences_weight"]
+
+    target_key = category_to_pref.get((category or "").upper())
+
+    if target_key:
+        delta = 0.05
+        decay = delta / 4.0
+
+        new_weights = {}
+        for key in pref_keys:
+            current_val = float(prefs.get(key) or 0.0)
+            if key == target_key:
+                new_weights[key] = min(1.0, current_val + delta)
+            else:
+                new_weights[key] = max(0.0, current_val - decay)
+
+        await db.execute(
+            """
+            UPDATE preferences 
+               SET total_redemptions = total_redemptions + 1,
+                   travel_weight = $2,
+                   dining_weight = $3,
+                   shopping_weight = $4,
+                   cashback_weight = $5,
+                   experiences_weight = $6,
+                   updated_at = NOW()
+             WHERE user_id = $1
+            """,
+            user_id,
+            new_weights["travel_weight"], new_weights["dining_weight"],
+            new_weights["shopping_weight"], new_weights["cashback_weight"],
+            new_weights["experiences_weight"]
+        )
+    else:
+        await db.execute(
+            "UPDATE preferences SET total_redemptions = total_redemptions + 1, updated_at = NOW() WHERE user_id = $1",
+            user_id
+        )

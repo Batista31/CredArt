@@ -77,6 +77,7 @@ class Candidate(BaseModel):
     source_url: Optional[str] = None
     note: Optional[str] = None
     caveat: Optional[str] = None
+    # Phase 6 — 5-dimension scoring (deterministic, 0–100)
     score_financial: Optional[float] = None
     score_lifestyle: Optional[float] = None
     score_redemption_prob: Optional[float] = None
@@ -126,6 +127,7 @@ class ChatResponse(BaseModel):
     requires_confirmation: bool = False
     memory_updates: list[str] = Field(default_factory=list)
     next_actions: list[str] = Field(default_factory=list)
+    suggested_replies: list[str] = Field(default_factory=list)
 
 
 class SmsRequest(BaseModel):

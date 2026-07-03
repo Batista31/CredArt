@@ -29,8 +29,7 @@ ALTER TABLE preferences
     ADD COLUMN IF NOT EXISTS preferred_airlines     TEXT[]  NOT NULL DEFAULT '{}',
     ADD COLUMN IF NOT EXISTS preferred_hotel_chains TEXT[]  NOT NULL DEFAULT '{}',
     ADD COLUMN IF NOT EXISTS preferred_cuisines     TEXT[]  NOT NULL DEFAULT '{}',
-    ADD COLUMN IF NOT EXISTS dietary_restrictions   TEXT[]  NOT NULL DEFAULT '{}',
-    ADD COLUMN IF NOT EXISTS family_size            INTEGER NOT NULL DEFAULT 1;
+    ADD COLUMN IF NOT EXISTS dietary_restrictions   TEXT[]  NOT NULL DEFAULT '{}';
 
 -- ------------------------------------------------------------
 -- 3. Saved delivery addresses — one or more per user, one default.
@@ -104,24 +103,22 @@ CREATE TRIGGER set_updated_at_user_addresses
 --   Riya Sharma — 00000000-0000-0000-0000-000000000002
 -- ============================================================
 
--- Riya: city Mumbai, family_size 1, prefers IndiGo.
+-- Riya: city Mumbai, prefers IndiGo.
 UPDATE users
    SET city = 'Mumbai', state = 'Maharashtra', date_of_birth = '1996-08-15'
  WHERE id = '00000000-0000-0000-0000-000000000002';
 
 UPDATE preferences
-   SET family_size = 1,
-       preferred_airlines = ARRAY['IndiGo']::TEXT[]
+   SET preferred_airlines = ARRAY['IndiGo']::TEXT[]
  WHERE user_id = '00000000-0000-0000-0000-000000000002';
 
--- Samyak: city Bengaluru, family_size 2, prefers North Indian + Italian.
+-- Samyak: city Bengaluru, prefers North Indian + Italian.
 UPDATE users
    SET city = 'Bengaluru', state = 'Karnataka', date_of_birth = '1994-03-22'
  WHERE id = '00000000-0000-0000-0000-000000000001';
 
 UPDATE preferences
-   SET family_size = 2,
-       preferred_cuisines = ARRAY['North Indian', 'Italian']::TEXT[]
+   SET preferred_cuisines = ARRAY['North Indian', 'Italian']::TEXT[]
  WHERE user_id = '00000000-0000-0000-0000-000000000001';
 
 -- Default delivery addresses (fixed ids so re-runs are no-ops).

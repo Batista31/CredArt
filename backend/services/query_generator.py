@@ -12,28 +12,32 @@ it never invents points values or availability (that stays in Layer 1).
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 
 from .llm_service import _llm_call
 
 # Journeys that are exploratory enough to benefit from guided questioning.
 # Instant/lookup journeys skip the planner entirely.
+# Travel journeys are intentionally NOT planned here: they use deterministic slot-filling
+# (dialogue_manager._missing_slots) so every required detail — destination, origin, dates,
+# passengers, cabin — is asked exactly once, one question at a time, with no LLM-driven
+# "confirm the dates?" loop.
 PLANNED_JOURNEYS = {
-    "travel_flight", "travel_hotel", "product_purchase", "gift_purchase",
-    "voucher_redemption", "home_setup", "merchandise_purchase",
+    "gift_purchase", "voucher_redemption", "home_setup", "merchandise_purchase",
 }
 
 _SYSTEM = """You are CredArt's context-gathering planner for an HDFC credit-card rewards concierge.
 
-Your job: look at the user's goal, what they have ALREADY told you (known_slots), and the
-recent conversation, then decide the single most useful next thing to say so that — once you
-have enough context — CredArt can recommend the best way to use their points/credits.
+Your job: look at the user's goal, what they have ALREADY told you (known_slots), the recent
+conversation, and today's date, then decide the single most useful next thing to say — or
+signal that you have enough context to recommend the best way to use their points/credits.
 
 Return ONLY valid JSON, no markdown:
 {
   "ready": true | false,
-  "slot": "<machine key for the info this question gathers, e.g. departure_window, party_composition, stay_preference>",
-  "question": "<ONE warm, natural question to ask the user, or null if ready>",
+  "slot": "<machine key for the info a question gathers, e.g. departure_window, destination>",
+  "question": "<ONE warm, natural question to ask, or null if ready>",
   "confirmation": "<a one-line recap of what you've gathered, shown when ready becomes true, or null>"
 }
 
@@ -63,6 +67,8 @@ Rules:
   simple product/voucher/gift journeys, just go straight to ready=true.
 - NEVER ask for information the system already owns: card IDs, card/account numbers, point
   balances, user IDs. Only ask about the user's own intent and preferences.
+- profile_defaults holds saved-profile hints — apply them silently and mention in the recap;
+  do NOT turn them into questions.
 - When ready=true, set question=null and fill confirmation with a short recap like
   "From what you've told me (2 adults + 1 child, Fri–Sun in Manali), here's the best way
   to use your points:". For simple product/voucher lookups, confirmation can be null.
@@ -82,8 +88,13 @@ async def next_context_question(
     history: list[dict],
     user_goal: str,
     questions_asked: int = 0,
+    profile_defaults: dict | None = None,
 ) -> dict:
     """Return {"ready": bool, "slot": str|None, "question": str|None, "confirmation": str|None}.
+
+    `profile_defaults` carries saved-profile values (e.g. usual party size) that the
+    planner should CONFIRM rather than ask open-ended — deliberately kept OUT of
+    known_slots so the slot stays "unanswered" and the turn is never silently skipped.
 
     Never raises — on any failure returns ready=True so the flow proceeds to recommendations
     rather than blocking the user. `questions_asked` is a hard, code-enforced cap: once hit,
@@ -92,16 +103,20 @@ async def next_context_question(
     cap = _QUESTION_CAP.get(journey_type, _DEFAULT_CAP)
     if questions_asked >= cap:
         return {"ready": True, "slot": None, "question": None, "confirmation": None}
+    _today = _dt.date.today()
     payload = json.dumps({
+        "today": _today.isoformat(),
+        "weekday_today": _today.strftime("%A"),
         "journey_type": journey_type,
         "user_goal": user_goal,
         "known_slots": known_slots,
+        "profile_defaults": profile_defaults or {},
         "history": (history or [])[-6:],
         "questions_already_asked": questions_asked,
         "questions_remaining": cap - questions_asked,
     }, default=str)
     try:
-        raw, _ = await _llm_call(_SYSTEM, payload)
+        raw, _ = await _llm_call(_SYSTEM, payload, json_mode=True)
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         parsed = json.loads(raw)
         return {

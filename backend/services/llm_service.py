@@ -8,6 +8,7 @@ Anti-hallucination contract:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from typing import Any
@@ -16,9 +17,27 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_API_KEY2 = os.getenv("GROQ_API_KEY2", "")
-GROQ_API_KEY3 = os.getenv("GROQ_API_KEY3", "")
+# Groq keys, tried in order: primary GROQ_API_KEY, then GROQ_API_KEY_2/_3…, then any
+# comma-separated GROQ_API_KEYS. When one key is rate-limited/exhausted we rotate to
+# the next before falling back to Gemini — so a burned free-tier daily quota on one
+# key doesn't take the LLM layer down.
+def _collect_groq_keys() -> list[str]:
+    keys: list[str] = []
+    for name in ("GROQ_API_KEY", "GROQ_API_KEY_2", "GROQ_API_KEY_3", "GROQ_API_KEY_4"):
+        v = (os.getenv(name) or "").strip()
+        if v:
+            keys.append(v)
+    for v in (os.getenv("GROQ_API_KEYS") or "").split(","):
+        v = v.strip()
+        if v:
+            keys.append(v)
+    # de-dup, preserve order
+    seen: set[str] = set()
+    return [k for k in keys if not (k in seen or seen.add(k))]
+
+
+GROQ_API_KEYS = _collect_groq_keys()
+GROQ_API_KEY = GROQ_API_KEYS[0] if GROQ_API_KEYS else ""  # back-compat
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
@@ -96,42 +115,62 @@ def _candidates_to_json(candidates: list[Any], user_name: str, user_message: str
     return json.dumps(data, ensure_ascii=False)
 
 
-async def _groq_chat(system: str, user: str, api_key: str = GROQ_API_KEY) -> str:
+# Hard per-request ceiling so a hung provider can never stall a chat turn —
+# the callers all degrade gracefully (heuristic intent, template reply).
+_LLM_TIMEOUT_S = 20.0
+
+
+async def _groq_chat(system: str, user: str, json_mode: bool = False) -> str:
+    """Try each Groq key in turn; raise only if every key fails (rate-limit etc.)."""
     from groq import AsyncGroq
-    client = AsyncGroq(api_key=api_key)
-    resp = await client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        temperature=0.2,
-        max_tokens=512,
-    )
-    return resp.choices[0].message.content.strip()
+    last_exc: Exception | None = None
+    for i, key in enumerate(GROQ_API_KEYS):
+        try:
+            # max_retries=0: key rotation is our retry — SDK-internal retries would
+            # stack timeouts and stall the turn instead.
+            client = AsyncGroq(api_key=key, timeout=_LLM_TIMEOUT_S, max_retries=0)
+            resp = await client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                temperature=0.2,
+                max_tokens=512,
+                **({"response_format": {"type": "json_object"}} if json_mode else {}),
+            )
+            return resp.choices[0].message.content.strip()
+        except Exception as e:  # noqa: BLE001
+            last_exc = e
+            print(f"[llm] Groq key #{i + 1} failed ({e}); trying next key")
+    raise last_exc or RuntimeError("no Groq API keys configured")
 
 
 async def _gemini_chat(system: str, user: str) -> str:
     from google import genai
     client = genai.Client(api_key=GEMINI_API_KEY)
-    resp = await client.aio.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=f"{system}\n\nUser: {user}",
+    resp = await asyncio.wait_for(
+        client.aio.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=f"{system}\n\nUser: {user}",
+        ),
+        timeout=_LLM_TIMEOUT_S,
     )
     return resp.text.strip()
 
 
-_GROQ_KEYS = [k for k in (GROQ_API_KEY, GROQ_API_KEY2, GROQ_API_KEY3) if k]
+async def _llm_call(system: str, user: str, *, json_mode: bool = False) -> tuple[str, bool]:
+    """Returns (text, groq_used). Falls back to Gemini after all Groq keys fail.
 
-
-async def _llm_call(system: str, user: str) -> tuple[str, bool]:
-    """Returns (text, groq_used). Tries each configured Groq key in order, then Gemini."""
-    for i, key in enumerate(_GROQ_KEYS, start=1):
+    `json_mode=True` asks Groq for a guaranteed-JSON response (the prompt must
+    mention JSON, which all structured prompts here do); Gemini replies are
+    stripped of markdown fences by the callers as before.
+    """
+    if GROQ_API_KEYS:
         try:
-            return await _groq_chat(system, user, key), True
+            return await _groq_chat(system, user, json_mode=json_mode), True
         except Exception as e:
-            nxt = "next Groq key" if i < len(_GROQ_KEYS) else "Gemini"
-            print(f"[llm] Groq (key{i}) failed ({e}), trying {nxt}")
+            print(f"[llm] all Groq keys failed ({e}), falling back to Gemini")
     if GEMINI_API_KEY:
         return await _gemini_chat(system, user), False
     raise RuntimeError("No LLM API key available (GROQ_API_KEY[2/3] or GEMINI_API_KEY required)")
@@ -158,9 +197,9 @@ async def llm_extract_intent(
                     f"{m['role'].upper()}: {m['content']}" for m in last
                 )
             user_payload = f"{context_note}\nNew user message: {message}\n\nExtract updated intent including any slot values the user just provided (e.g. city names, dates, passenger counts, cabin class, budgets). If this message is answering a previous question, set kind=unknown so the prior intent kind is preserved."
-            raw, _ = await _llm_call(_INTENT_SYSTEM, user_payload)
+            raw, _ = await _llm_call(_INTENT_SYSTEM, user_payload, json_mode=True)
         else:
-            raw, _ = await _llm_call(_INTENT_SYSTEM, message)
+            raw, _ = await _llm_call(_INTENT_SYSTEM, message, json_mode=True)
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         return json.loads(raw)
     except Exception as e:
@@ -228,7 +267,7 @@ async def llm_check_completeness(
             for c in candidates[:6]
         ]
     payload = json.dumps(payload_obj, default=str)
-    raw, _ = await _llm_call(_COMPLETENESS_SYSTEM, payload)
+    raw, _ = await _llm_call(_COMPLETENESS_SYSTEM, payload, json_mode=True)
     raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     parsed = json.loads(raw)
     return bool(parsed.get("is_complete", True)), parsed.get("follow_up_question")

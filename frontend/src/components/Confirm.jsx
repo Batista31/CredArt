@@ -157,7 +157,11 @@ export function Confirm({ booking, mode, onDone, onBackToChat }) {
   const [otpBusy, setOtpBusy] = React.useState(false);
   const [failReason, setFailReason] = React.useState("");
   const bookingSessionId = React.useRef(null);
-  const firedRef = React.useRef(false);
+  // Fire the real redemption EXACTLY once. React.StrictMode (dev) mounts effects
+  // twice; without this guard api.redeem() would be called twice (double spend).
+  // mountedRef is reset on the StrictMode remount so the UI still completes.
+  const startedRef = React.useRef(false);
+  const mountedRef = React.useRef(true);
 
   const markDone = (i) => setDone((d) => { const n = [...d]; n[i] = true; return n; });
 
@@ -173,18 +177,9 @@ export function Confirm({ booking, mode, onDone, onBackToChat }) {
 
   // drive the real redemption
   React.useEffect(() => {
-    // React 18 StrictMode double-invokes effects in dev (mount → cleanup → mount).
-    // api.redeem() is a real booking call with side effects (real points debited,
-    // a real Duffel order placed) — it must fire exactly once per booking attempt,
-    // and once fired it must run to completion. firedRef (a ref, so it survives
-    // StrictMode's synthetic remount) is the dedupe guard. There is deliberately no
-    // "cancelled" abort flag here: this booking's own component instance is never
-    // legitimately unmounted mid-flight from user action (the Confirm screen owns
-    // the whole booking lifecycle), so the only place a "cancelled" check could fire
-    // is StrictMode's synthetic cleanup — which would silently freeze the UI after
-    // the real call already went out, leaving points debited with no visible result.
-    if (firedRef.current) return;
-    firedRef.current = true;
+    mountedRef.current = true;
+    if (startedRef.current) return () => { mountedRef.current = false; };
+    startedRef.current = true;
     (async () => {
       // fire the real call immediately, animate the first leg in parallel
       const redeemPromise = api.redeem({
@@ -194,7 +189,8 @@ export function Confirm({ booking, mode, onDone, onBackToChat }) {
       await runSteps(0, 3);
       let res;
       try { res = await redeemPromise; }
-      catch (e) { setFailReason(String(e.message || e)); setPhase("failed"); return; }
+      catch (e) { if (mountedRef.current) { setFailReason(String(e.message || e)); setPhase("failed"); } return; }
+      if (!mountedRef.current) return;
 
       if (res.status === "otp_required") {
         bookingSessionId.current = res.booking_session_id;
@@ -206,17 +202,17 @@ export function Confirm({ booking, mode, onDone, onBackToChat }) {
             amount: s.amount, last4: s.card_last4,
             secondsLeft: s.otp_deadline ? Math.max(10, Math.round(s.otp_deadline - Date.now() / 1000)) : 150,
           };
-        } catch { /* use fallback ctx */ }
-        setOtpCtx(ctx); setPhase("otp");
+        if (mountedRef.current) { setOtpCtx(ctx); setPhase("otp"); }
       } else if (res.status === "completed") {
         setResult(res);
         await runSteps(3, allSteps.length);
-        setPhase("success");
-      } else {
+        if (mountedRef.current) setPhase("success");
+      } else if (mountedRef.current) {
         setFailReason(res.rollback_reason || res.address_prompt || res.detail || "Could not complete this redemption.");
         setPhase("failed");
       }
     })();
+    return () => { mountedRef.current = false; };
   }, []);
 
   async function submitOtp(code) {

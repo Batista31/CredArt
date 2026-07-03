@@ -31,7 +31,11 @@ _PRODUCT_WORDS = ["phone", "smartphone", "iphone", "laptop", "macbook", "tablet"
                   "headphone", "earbud", "airpod", "watch", "smartwatch", "speaker", "camera",
                   "tv", "television", "console", "playstation", "xbox", "gadget", "appliance",
                   "mixer", "blender", "shoe", "sneaker", "bag", "backpack", "sunglass",
-                  "phone stand", "charger", "monitor", "keyboard", "mouse", "merchandise", "product"]
+                  "phone stand", "charger", "monitor", "keyboard", "mouse", "merchandise", "product",
+                  # kitchen / home appliances
+                  "cooker", "microwave", "oven", "refrigerator", "fridge", "washing machine",
+                  "air fryer", "airfryer", "toaster", "kettle", "grinder", "vacuum cleaner",
+                  "cooktop", "induction", "geyser", "air conditioner", "dishwasher", "purifier"]
 
 CITY_TO_IATA = {
     "bangalore": "BLR", "bengaluru": "BLR", "mumbai": "BOM", "bombay": "BOM",
@@ -39,14 +43,16 @@ CITY_TO_IATA = {
     "hyderabad": "HYD", "kolkata": "CCU", "pune": "PNQ", "ahmedabad": "AMD",
     "kochi": "COK", "cochin": "COK", "jaipur": "JAI",
     "dubai": "DXB", "abu dhabi": "AUH", "london": "LHR", "singapore": "SIN",
+    "new york": "JFK", "paris": "CDG", "bangkok": "BKK", "tokyo": "NRT",
+    "maldives": "MLE", "male": "MLE", "sydney": "SYD", "hong kong": "HKG",
+    "frankfurt": "FRA", "amsterdam": "AMS", "istanbul": "IST", "doha": "DOH",
+    "colombo": "CMB", "kathmandu": "KTM",
 }
 
 
 def _city_to_iata(v: str) -> str | None:
     return CITY_TO_IATA.get(v.lower())
 
-
-_ALWAYS_COMPLETE = {"greeting", "check_expiry", "unknown"}
 
 _SLOT_PATTERNS = {
     "style": ["cozy", "modern", "luxury", "minimal", "functional"],
@@ -70,7 +76,14 @@ _HOME_PRODUCTS = [
 
 
 def _match(text: str, words: list[str]) -> bool:
-    return any(w in text for w in words)
+    """Left-word-boundary match: "expir" still catches "expiring", but "eat"
+    no longer matches "seat" and "hi" no longer matches "chennai"/"delhi"."""
+    return any(re.search(rf"\b{re.escape(w)}", text) for w in words)
+
+
+def _match_word(text: str, words: list[str]) -> bool:
+    """Full-word match — for greetings, where "hi" must not catch "high"."""
+    return any(re.search(rf"\b{re.escape(w)}\b", text) for w in words)
 
 
 async def extract_intent(
@@ -107,21 +120,24 @@ async def extract_intent(
             # Deterministic journey override: smaller LLMs often mislabel "buy a <product>
             # with points" as general advice. If the text clearly names orderable
             # merchandise, force product_purchase so the merchandise flow engages.
+            prod = next((w for w in _PRODUCT_WORDS if w in text), None)
             if merged.get("journey_type") in (None, "general_reward_advice", "card_benefit_lookup"):
-                if _match(text, _PRODUCT_WORDS) and _match(text, _BUY_WORDS):
+                if prod and _match(text, _BUY_WORDS):
                     merged["journey_type"] = "product_purchase"
                     merged.setdefault("kind", "redeem")
-            is_complete = True
-            follow_up_question = None
-            if merged.get("kind") not in _ALWAYS_COMPLETE:
-                try:
-                    from services.llm_service import llm_check_completeness
-                    is_complete, follow_up_question = await llm_check_completeness(
-                        merged, conversation_history or []
-                    )
-                except Exception as e:
-                    print(f"[intent] completeness check failed ({e}), treating as complete")
-            return Intent(**merged, is_complete=is_complete, follow_up_question=follow_up_question)
+            # Capture the product the user named THIS turn as product_category, so the
+            # merchandise search uses the actual item — not a stale slot carried over
+            # from a previous conversation. setdefault preserves any more specific
+            # value the LLM already extracted.
+            if prod and merged.get("journey_type") in ("product_purchase", "merchandise_purchase", "gift_purchase"):
+                merged.setdefault("slots", {})
+                merged["slots"].setdefault("product_category", prod)
+            # Completeness is owned by the dialogue manager (clarify gate, static
+            # slot-filling, planner, and the post-candidate LLM check). Running a
+            # second LLM completeness round here added a blocking round-trip to
+            # EVERY turn and could surface a chip-less "tell me more" dead-end via
+            # orchestrate's early return — so intents extract as complete.
+            return Intent(**merged, is_complete=True, follow_up_question=None)
         except Exception:
             pass  # fall through to heuristic
 
@@ -130,7 +146,7 @@ async def extract_intent(
     category = next((cat for cat, hints in _CATEGORY_HINTS.items() if _match(text, hints)), None)
     urgency = _match(text, _EXPIRY)
 
-    if not text or (len(text) <= 12 and _match(text, _GREETING)):
+    if not text or (len(text) <= 12 and _match_word(text, _GREETING)):
         kind = "greeting"
     elif urgency:
         kind = "check_expiry"

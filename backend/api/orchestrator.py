@@ -19,7 +19,23 @@ from uuid import uuid4
 from services import bank_mcp_client, cmr_service, scoring_service, user_service
 from services.redemption import registry
 
+from .intent import CITY_TO_IATA
 from .schemas import Candidate, FulfillmentOption, Intent, ToolCall
+
+# Estimated points for an economy flight redemption. The real fare is searched +
+# confirmed live at booking time (Duffel); this is the deterministic redeem cost.
+_FLIGHT_POINTS_COST = 25000
+
+# When the ask is generic (no explicit category), seed the candidate pool from
+# the user's dominant preference — so a dining-lover actually sees dining options
+# and a traveller sees travel. Preference then shapes the POOL, not just the rank.
+_PREF_SEED = {
+    "travel_weight":      "travel flight hotel lounge getaway",
+    "dining_weight":      "dining restaurant food gourmet",
+    "shopping_weight":    "shopping voucher electronics fashion",
+    "experiences_weight": "movie concert show event spa wellness",
+    "cashback_weight":    "cashback statement credit milestone",
+}
 
 
 def _expiry_phrase(days: int | None) -> str:
@@ -35,12 +51,20 @@ def _expiry_phrase(days: int | None) -> str:
 
 
 async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> tuple[list[Candidate], list[ToolCall], dict]:
+    # Still gathering intent — skip candidate assembly and return the follow-up question.
+    if not intent.is_complete:
+        question = intent.follow_up_question or "Could you tell me a bit more?"
+        return [], [], {"reply": question, "llm_used": False, "soonest_expiry": None}
+
     trace: list[ToolCall] = []
     candidates: list[Candidate] = []
 
     held = {c["card_id"] for c in cards}
     name_of = {c["card_id"]: c["card_name"] for c in cards}
     points_of = {c["card_id"]: c["current_points"] for c in cards}
+
+    # User preference weights — used to seed the candidate pool for generic asks.
+    prefs = await user_service.get_preferences(user["user_id"]) or {}
 
     _caveat_cache: dict[str, str | None] = {}
 
@@ -80,42 +104,68 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
                 source_url=option["source_url"], note="redeemable before expiry", caveat=caveat))
 
     if intent.kind in ("explore_benefits", "redeem"):
+        _seen: set[tuple[str, str]] = set()  # (card_id, benefit_name) dedup
+
+        async def add_hits(hits: list[dict]) -> None:
+            for h in hits:
+                if h["card_id"] not in held:
+                    continue  # never suggest a card the user doesn't hold
+                key = (h["card_id"], h["benefit_name"])
+                if key in _seen:
+                    continue
+                _seen.add(key)
+                pc = h.get("points_cost")
+                if pc is None:
+                    candidates.append(Candidate(
+                        kind="perk", card_id=h["card_id"], card_name=name_of[h["card_id"]],
+                        label=h["benefit_name"], category=h.get("category"),
+                        similarity=h["similarity"], source_url=h["source_url"],
+                        note="included benefit (no points cost)"))
+                else:
+                    bal = points_of.get(h["card_id"], 0)
+                    candidates.append(Candidate(
+                        kind="redemption", card_id=h["card_id"], card_name=name_of[h["card_id"]],
+                        label=h["benefit_name"], category=h.get("category"),
+                        points_cost=pc, affordable=bal >= pc,
+                        similarity=h["similarity"], source_url=h["source_url"],
+                        note=None if bal >= pc else f"needs {pc - bal:,} more points",
+                        caveat=await caveat_for(h["card_id"])))
+
         query = intent.query.strip() or (intent.category or "rewards")
         hits = await bank_mcp_client.get_benefit_chunks(query, intent.card_id, top_k=8)
         trace.append(ToolCall(tool="get_benefit_chunks",
                               args={"query": query, "card_id": intent.card_id},
                               result_count=len(hits)))
-        category_hits = [
-            hit for hit in hits
-            if (hit.get("category") or "").upper() == (intent.category or "").upper()
-        ]
-        relevant_hits = category_hits if intent.category and category_hits else hits
-        for hit in relevant_hits:
-            if hit["card_id"] not in held:
-                continue
-            points_cost = hit.get("points_cost")
-            if points_cost is None:
-                candidates.append(Candidate(
-                    kind="perk", card_id=hit["card_id"], card_name=name_of[hit["card_id"]],
-                    label=hit["benefit_name"], category=hit.get("category"),
-                    similarity=hit["similarity"], source_url=hit["source_url"],
-                    note="included benefit (no points cost)"))
-            else:
-                balance = points_of.get(hit["card_id"], 0)
-                candidates.append(Candidate(
-                    kind="redemption", card_id=hit["card_id"], card_name=name_of[hit["card_id"]],
-                    label=hit["benefit_name"], category=hit.get("category"),
-                    points_cost=points_cost, affordable=balance >= points_cost,
-                    similarity=hit["similarity"], source_url=hit["source_url"],
-                    note=None if balance >= points_cost else f"needs {points_cost - balance:,} more points",
-                    caveat=await caveat_for(hit["card_id"])))
+        await add_hits(hits)
 
-    include_transfers = (
+        # Generic ask (no explicit category): also pull in the user's dominant
+        # preference categories, so preferences shape the candidate POOL — not
+        # just the ranking. This is what makes a dining-lover see dining options.
+        # Seed from EVERY preference within 15% of the top weight (cap 2), so a
+        # user who likes e.g. travel and dining equally gets a mix of both, not
+        # an arbitrary single winner.
+        if intent.category is None and prefs:
+            ranked = sorted(_PREF_SEED, key=lambda k: float(prefs.get(k) or 0.0), reverse=True)
+            top_w = float(prefs.get(ranked[0]) or 0.0)
+            chosen = [k for k in ranked if float(prefs.get(k) or 0.0) >= top_w * 0.85][:2] if top_w > 0 else []
+            for pref_key in chosen:
+                seed_q = _PREF_SEED[pref_key]
+                seed_hits = await bank_mcp_client.get_benefit_chunks(seed_q, intent.card_id, top_k=5)
+                trace.append(ToolCall(tool="get_benefit_chunks",
+                                      args={"query": seed_q, "seed": pref_key},
+                                      result_count=len(seed_hits)))
+                await add_hits(seed_hits)
+
+    # --- Transfer candidates ---
+    # Airline/hotel transfers are travel-specific. Inject them for an explicit
+    # transfer intent, or a general/travel explore/redeem — but NOT for a dining /
+    # shopping / entertainment / wellness request, where they're just noise.
+    _transfers_relevant = (
         intent.kind == "transfer"
         or (intent.kind in ("explore_benefits", "redeem")
-            and (intent.category is None or intent.category == "TRAVEL"))
+            and intent.category in (None, "TRAVEL"))
     )
-    if include_transfers:
+    if _transfers_relevant:
         target = [intent.card_id] if intent.card_id else list(held)
         for cid in target:
             partners = await bank_mcp_client.get_transfer_partners(cid)
@@ -128,9 +178,29 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
                     effective_value_inr=float(partner["effective_value_inr"]) if partner["effective_value_inr"] is not None else None,
                     best_use_case=partner["best_use_case"], source_url=partner["source_url"]))
 
+    # --- First-class flight candidate (Duffel live) when a destination is known ---
+    if intent.destination and intent.kind in ("explore_benefits", "redeem"):
+        home = ((user or {}).get("city") or "").lower()
+        origin = intent.origin or CITY_TO_IATA.get(home) or "DEL"
+        dest = intent.destination
+        travel_card = max(cards, key=lambda c: c["current_points"]) if cards else None
+        if travel_card and origin != dest:
+            cid = travel_card["card_id"]
+            bal = points_of.get(cid, 0)
+            candidates.append(Candidate(
+                kind="redemption", card_id=cid, card_name=name_of[cid],
+                label=f"Flight {origin}→{dest}", category="TRAVEL",
+                points_cost=_FLIGHT_POINTS_COST, affordable=bal >= _FLIGHT_POINTS_COST,
+                origin=origin, destination=dest, depart_date=intent.depart_date,
+                best_use_case="flight booking",
+                note="estimated economy redemption — fare confirmed at booking"))
+            trace.append(ToolCall(tool="build_flight_candidate",
+                                  args={"origin": origin, "destination": dest,
+                                        "depart_date": intent.depart_date}, result_count=1))
+
     # --- CMR: fetch user profile signals (Layer 1, never sent to the LLM) ---
+    # `prefs` was already fetched above for preference-seeding; reuse it.
     uid = user["user_id"]
-    prefs = await user_service.get_preferences(uid) or {}
     wishlist = await cmr_service.get_wishlist_labels(uid)
     dismissed = await cmr_service.get_dismissed_labels(uid)
 
@@ -144,17 +214,33 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
                                   result_count=len(candidates)))
 
     # --- Phase 6: deterministic 5-dimension scoring + rank (+ CMR boost) ---
+    # intent_category steers the current request; prefs/wishlist add the CMR boost.
     candidates = await scoring_service.score_candidates(
-        uid, candidates, cards, prefs=prefs, wishlist_labels=wishlist)
+        uid, candidates, cards, intent_category=intent.category,
+        prefs=prefs, wishlist_labels=wishlist)
     if candidates:
         trace.append(ToolCall(tool="score_candidates", args={"dims": 5},
                               result_count=len(candidates)))
 
-    for candidate in candidates:
-        candidate.candidate_id = uuid4().hex[:8]
-        if candidate.kind in ("redemption", "perk", "transfer"):
-            candidate.fulfillment_options = [FulfillmentOption(**option)
-                                             for option in registry.fulfillment_options_for(candidate.model_dump())]
+    # Collapse the same reward held on multiple cards (e.g. a "Milestone bonus"
+    # on each card, or a voucher available on two cards) to its single
+    # best-scored instance — so the user sees each distinct option once, on the
+    # card where it scores best. candidates are already sorted desc, so the first
+    # occurrence per label is the best one.
+    if candidates:
+        _best_by_label: dict[str, Candidate] = {}
+        for c in candidates:
+            _best_by_label.setdefault(c.label, c)
+        candidates = list(_best_by_label.values())
+        for rank, c in enumerate(candidates, 1):
+            c.rank = rank
+
+    # --- Phase 9: stable id + fulfilment options (live providers + always demo) ---
+    for c in candidates:
+        c.candidate_id = uuid4().hex[:8]
+        if c.kind in ("redemption", "perk", "transfer", "merchandise"):
+            c.fulfillment_options = [FulfillmentOption(**o)
+                                     for o in registry.fulfillment_options_for(c.model_dump())]
 
     llm_reply = None
     llm_used = False

@@ -18,7 +18,7 @@ import logging
 import os
 from uuid import uuid4
 
-from .. import db, scoring_service
+from .. import db
 from . import booking_session_service as bss
 from . import registry
 from .base import RedemptionProvider
@@ -221,8 +221,9 @@ async def _finalize(txn_id, user_id, candidate, provider, traveler, mode, row) -
         )
 
         # Dynamic lifestyle learning — nudge confirmed category weight up (best-effort).
+        from .. import user_service
         try:
-            await scoring_service.update_preferences(user_id, candidate.get("category", ""))
+            await user_service.update_preferences_after_redemption(user_id, candidate.get("category"))
         except Exception as exc:  # noqa: BLE001
             log.warning("update_preferences failed for %s: %s", user_id, exc)
 
