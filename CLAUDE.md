@@ -56,9 +56,11 @@ bank-style catalogue + the user's own data), never invented by the LLM.
 | Redemption providers/executor | `backend/services/redemption/*` |
 | **Food & Dining router (Subway)** — self-contained | `backend/api/dining.py` |
 | **Entertainment & Cinema router (TMDB)** — self-contained | `backend/api/entertainment.py` |
-| Frontend root (landing router + laptop/mobile toggle) | `frontend/src/App.jsx` |
-| **Per-category themes** (CSS-var palettes + meta) | `frontend/src/theme.jsx` |
-| Landing page · themed category chat · bank experience | `frontend/src/components/{Landing,CategoryChat,BankExperience}.jsx` |
+| Frontend root (login → landing → store stage router) | `frontend/src/App.jsx` |
+| **Per-category themes** (CSS-var palettes + meta) — only `rewards` is mounted | `frontend/src/theme.jsx` |
+| Rewards Catalogue: sign-in · visual landing · store + cart · OTP checkout | `frontend/src/components/{RewardsLogin,RewardsLanding,RewardsCatalogue,RewardsCheckout}.jsx` |
+| Floating CredArt concierge bubble (local intent engine + backend enrichment) | `frontend/src/components/CredArtBubble.jsx` |
+| Hardcoded rewards catalogue + personas + local concierge engine | `frontend/src/lib/catalogue.js` |
 | Frontend API client (bank + dining + entertainment) | `frontend/src/lib/api.js` |
 | Schema (Prisma mirror) | `db/prisma/schema.prisma` |
 | Migrations | `db/prisma/migrations/NNNN_name/migration.sql` |
@@ -264,31 +266,83 @@ deterministic template reply when no key is configured).
 
 # Frontend (`frontend/`, React + Vite, port 5173)
 
-- **Landing router** (`App.jsx`): a premium landing page (`components/Landing.jsx`)
-  with three category cards → picking one opens that world's themed concierge. Also
-  hosts a global **laptop ⇄ mobile** toggle (fixed top-right): laptop shows the
-  browser-window shell; mobile re-renders the *same* experience inside a phone frame
-  (`components/IOSDevice.jsx`). Every experience takes a `view` prop and fits the frame.
-- **Per-category theming** (`theme.jsx`): every component reads its colours from the
-  global `--brand-*` CSS scale. Each category (bank = navy+gold, dining = green+yellow,
-  entertainment = purple+red) overrides that scale on a wrapper `div`, so a whole
-  experience — including the untouched bank chat — re-themes with **no** component
-  changes. `theme.meta` carries per-category greeting/chips/demo-user config.
-- **Bank experience** (`components/BankExperience.jsx`): the original HDFC app moved out
-  of `App.jsx` verbatim (dashboard + Riya/Samyak persona switcher + `Concierge` chat +
-  `Confirm`), plus a "Categories" back button. Behaviour and every backend call are
-  unchanged.
-- **Category chat** (`components/CategoryChat.jsx`): the themed dining/entertainment chat
-  — greeting, quick chips, recommendation cards (movie posters as thumbnails), and a
-  redeem button that debits demo points and shows the confirmation reference. Redeem is
-  gated on the **live** balance.
-- **Concierge chat** (`components/Concierge.jsx`): the bank chat — `suggested_replies` as
-  tap chips, product `thumbnail`s, a **conversation-history drawer**, a **New chat**
-  button. `Confirm.jsx` fires the real redemption **exactly once** (StrictMode-safe guard).
-- **API client** (`src/lib/api.js`): `ACTIVE_USER_ID` is mutable so the persona switcher
-  flips the whole bank app; `conversations()` / `conversation(id)` back the history drawer.
-  `dining*` / `ent*` methods call the new routers (no `user_id` — each router has its own
-  demo user).
+The frontend is currently a **single experience**: the CredArt Rewards Catalogue — a
+Kobie / Navy-Federal-style points store (browse → cart → OTP-secured redemption) with a
+floating CredArt AI concierge on top. The earlier multi-world landing (Bank / Food &
+Dining / Entertainment picker + laptop⇄mobile toggle) has been replaced; those routers
+still exist and work at the **backend** level (`/chat`, `/dining/*`, `/entertainment/*`)
+but their frontend components are no longer mounted — see "Orphaned components" below.
+
+- **Stage router** (`App.jsx`): three stages, no routing library —
+  `login` (`RewardsLogin.jsx`) → `landing` (`RewardsLanding.jsx`) → `store`
+  (`RewardsCatalogue.jsx`). Login accepts any credentials (demo). Landing's
+  `onEnter(categoryKey | null)` opens the store, optionally deep-linked into a category
+  (`initialCategory`). The store's back arrow calls `onExit` to return to landing.
+- **Theme** (`theme.jsx`): only the `rewards` theme (navy + gold) is applied — via
+  `--brand-*` CSS vars on the root wrapper in `App.jsx`. The `bank` / `dining` /
+  `entertainment` theme entries and `CategoryIcon` cases still exist (harmless, unused).
+- **Hardcoded catalogue + local concierge engine** (`lib/catalogue.js`) — the single
+  source of truth for the store. No backend call ever fetches catalogue items, so the
+  store is byte-identical every demo run:
+  - `CATALOGUE` — 4 categories (`travel`, `giftcards`, `cashback`, `merchandise`),
+    **50+ items each** (curated hero items with fixed ids + bulk-generated rows).
+  - `CAT_PERSONAS` — Riya (₹travel-lean, 84,500 pts) / Samyak (dining-lean, 50,000 pts),
+    keyed by the **same** user ids as `api.js`'s `USERS` so the persona switcher stays
+    in sync with the real backend `/chat` calls. Each carries a `cmr` fallback profile
+    (address/city/family size/preferences) used by checkout when the backend is offline.
+  - `runConcierge(message, ctx)` — the local intent engine driving the chat bubble.
+    Deliberately mirrors **`dialogue_manager.py`'s interaction character**, not its code:
+    one question at a time (a real slot-filled trip journey: destination → dates, never
+    a form), a clarify gate for unmatched asks, and a **personalization-forward opener**
+    — a fully vague ask ("how should I spend my points?") skips the clarify question when
+    the persona has a clear category lean and leads straight into it with a "your profile
+    leans toward X, so I started there" preface + switch chips. Recommendations are
+    always ordered affordable-first against the user's *spendable* budget
+    (balance − cart total) with over-budget items flagged in the reply text — see
+    "Budget honesty" below.
+- **Rewards store** (`RewardsCatalogue.jsx`): navbar (account pill with live points,
+  cart, persona switcher), a photo hero, 4 category tiles, per-category grids with
+  search + a "Filter & Sort" points sort. State (balances, per-persona carts) lives here
+  and is threaded down to the modal, cart panel, checkout overlay, and the bubble.
+- **Cart, not instant redeem**: "View Details" → **Add to Cart** (`addToCart`) reserves
+  an item without touching points; the navbar cart badge reflects pending cart items.
+  The cart panel (`CartPanel`) lists items with remove + a **Redeem Cart** button.
+  `addToCart` enforces the running cart subtotal against the balance immediately, with a
+  specific reason string, so a user is never told "insufficient points" only after
+  going through checkout.
+- **OTP-secured checkout** (`RewardsCheckout.jsx`) — ported from the original bank
+  `Confirm.jsx` execution flow's *style* (not its API calls; this store never touches
+  the real ledger): agentic progress steps → (merchandise only) a **CMR-autofilled
+  delivery address** step, fetched live from `GET /cmr/{user_id}` when the backend is
+  reachable else the seeded fallback in `catalogue.js` → 6-digit **OTP** entry (a demo
+  SMS card shows the code in-UI since there's no real bank behind this store; wrong code
+  shakes, expiry/cancel leaves the cart and balance untouched) → per-item booking
+  references shaped like the real provider would return (flight **PNR**, other travel
+  **Booking ID**, gift-card **voucher code**, cashback **txn ref**, merchandise
+  **order #**). Points are debited via `performCheckout` (in `RewardsCatalogue.jsx`)
+  **only after** the OTP verifies.
+- **Budget honesty, surfaced before commitment** (not just at checkout): grid product
+  cards show an "⚠ N pts short" badge on the photo; the detail modal shows a full
+  warning box and disables Add to Cart; the chat bubble's inline item cards grey out and
+  disable Add with a shortfall chip; `addToCart` itself is the final, authoritative gate.
+- **Floating CredArt bubble** (`CredArtBubble.jsx`): pulsing launcher, slide-up panel,
+  persona-specific proactive greeting with the **live** balance patched in
+  (`greetingFor`). Runs `runConcierge` locally first (so recommendations always name
+  real catalogue items and redemption is instant/reliable); an unmatched message pings
+  the real backend `/chat` (with the active persona's `user_id`) as best-effort
+  enrichment, falling back to a mocked reply if the backend is unreachable.
+- **API client** (`src/lib/api.js`): `ACTIVE_USER_ID` is mutable — the store's persona
+  switcher calls `setActiveUser` so the bubble's backend `/chat` fallback still targets
+  the right seeded user even though the bank dashboard UI isn't shown.
+
+### Orphaned components (not mounted, kept on disk)
+
+`Landing.jsx`, `BankExperience.jsx`, `CategoryChat.jsx`, `IOSDevice.jsx`,
+`Concierge.jsx`, `Confirm.jsx`, `Dashboard.jsx`, `fulfillment.jsx`, `mode.jsx` are the
+previous multi-world frontend. They still compile and their backend routes
+(`/chat`, `/redeem`, `/dining/*`, `/entertainment/*`) still work — only `App.jsx` no
+longer renders them. If the multi-world picker is restored later, these are the
+starting point; until then, treat them as unreachable via the running UI.
 
 ## Run
 
@@ -311,15 +365,33 @@ cd frontend
 npm run dev
 ```
 
-Then open <http://localhost:5173> — the landing page offers the three worlds; the
-top-right **laptop ⇄ mobile** toggle previews the phone layout. For the bank demo
-keep the mode toggle on **Demo** (replayable, safe); flip to **Production** only to
-show a real Duffel booking reference or a real Tango voucher.
+Then open <http://localhost:5173> — sign in (any credentials), land on the visual
+Rewards Catalogue landing page, then **Browse the Store** or **Explore Travel** (deep
+links straight into a category). The old bank/dining/entertainment picker and the
+laptop⇄mobile toggle are no longer surfaced by the frontend (see "Orphaned components"
+above); the bank demo below still works but only via the backend routes those
+components used to call, so run it through the orphaned `Concierge`/`BankExperience`
+components directly if needed, or `curl`/Postman against `/chat` and `/redeem`.
 
 Apply migrations against the DB the same way as the others (the SQL in
 `db/prisma/migrations/NNNN_name/migration.sql`).
 
-## Demo walkthrough
+## Demo walkthrough — Rewards Catalogue (current frontend)
+
+1. Sign in → landing page → **Explore Travel**.
+2. Ask the CredArt bubble `how should I spend my points?` — Riya's travel lean
+   surfaces IndiGo/Marriott/lounge picks with a "since your profile leans toward
+   travel" preface and switch chips (personalization proof, no clicks needed).
+3. `I'm planning a trip` → **Goa** → **This weekend** → picks ordered affordable-first,
+   any over-budget item flagged in the reply text before you can act on it.
+4. Add a pick to cart → open the cart (navbar) → **Redeem Cart** → OTP screen (code
+   shown in a simulated bank SMS card) → success screen with a real-shaped PNR.
+5. Switch to **Samyak** → same vague opener leans dining instead (contrast demo).
+6. Samyak adds a merchandise item → checkout inserts a delivery step **autofilled from
+   his CMR profile** (live `GET /cmr/{user_id}` if the backend is up, else the seeded
+   fallback) before the OTP step.
+
+## Demo walkthrough — Bank backend (via orphaned components / API)
 
 1. **Riya dashboard** → point out Millennia CashPoints expiring today.
 2. `what's expiring?` → instant, deterministic urgency answer.
