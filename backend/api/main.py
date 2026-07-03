@@ -236,7 +236,11 @@ async def cards(user_id: str):
     user = await user_service.get_user(user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="unknown user_id")
-    return {"user": user, "cards": await user_service.get_user_cards(user_id)}
+    from services.merchandise_catalog import MIN_POINTS
+    # merch_floor_points: cheapest catalogue item — lets the UI warn a
+    # low-balance user up front (Layer-1 number, never invented).
+    return {"user": user, "cards": await user_service.get_user_cards(user_id),
+            "merch_floor_points": MIN_POINTS}
 
 
 # ---------------------------------------------------------------------------

@@ -106,51 +106,110 @@ async def _search_products(query: str, limit: int) -> list[dict]:
     return out
 
 
+def _catalog_candidate(p: dict, card: dict, balance: int, rank: int) -> Candidate:
+    """One rewards-catalogue product as a redeemable Candidate. Points price is
+    catalogue-wide (the bank store's own price), never derived or invented."""
+    points_cost = int(p["points"])
+    affordable = balance >= points_cost
+    return Candidate(
+        kind="merchandise",
+        candidate_id=uuid.uuid4().hex[:8],
+        card_id=card["card_id"],
+        card_name=card["card_name"],
+        label=p["title"],
+        category="SHOPPING",
+        points_cost=points_cost,
+        affordable=affordable,
+        effective_value_inr=float(p["value_inr"]),
+        best_use_case=(f"{p['brand']} · {p['blurb']}" + ("" if affordable else " · save up a little more")),
+        source_url=None,
+        note=(None if affordable else f"needs {points_cost - balance:,} more points"),
+        caveat=None,
+        rank=rank,
+        fulfillment_options=[
+            {"provider_id": "demo", "label": "Order with points", "path": "demo",
+             "mode": "demo", "currency": "demo_points", "available": True, "note": None},
+        ],
+        metadata={"brand": p["brand"], "icon": p["icon"], "description": p["blurb"],
+                  "catalog_id": p["id"], "source": "rewards_catalogue"},
+    )
+
+
 async def search_merchandise_candidates(
     query: str, cards: list[dict], limit: int = 4, active_card_id: str | None = None
 ) -> tuple[list[Candidate], dict | None]:
-    """Real products as redeemable Candidates (points → Amazon voucher → order).
-    ([], None) on miss."""
+    """Rewards-catalogue products as redeemable Candidates. Catalogue-first (the
+    bank's own merchandise store is the primary sales channel); affordable items
+    lead so the user always sees something they can order right now.
+    ([], None) on miss — the caller then offers the voucher alternative."""
     query = (query or "").strip()
     if not query:
         return [], None
-    search_q = _clean_query(query)
-    products = await _search_products(search_q, limit)
+    from . import merchandise_catalog
+    products = merchandise_catalog.search(_clean_query(query), limit)
     if not products:
         return [], None
     card, suggestion = pick_card(cards, CARD_VOUCHER_POINT_VALUE, _DEFAULT_POINT_VALUE, active_card_id)
     if card is None:
         return [], None
+    balance = card.get("current_points") or 0
+    # Affordable first (cheapest leading), then aspirational — maximizes the
+    # chance the top card is a one-tap order.
+    products.sort(key=lambda p: (balance < p["points"], p["points"]))
+    return [_catalog_candidate(p, card, balance, i + 1) for i, p in enumerate(products)], suggestion
+
+
+def popular_catalog_candidates(
+    cards: list[dict], limit: int = 3, active_card_id: str | None = None
+) -> list[Candidate]:
+    """Catalogue bestsellers — shown when a search misses so the catalogue stays
+    in front of the user instead of dead-ending into vouchers only."""
+    from . import merchandise_catalog
+    card, _ = pick_card(cards, CARD_VOUCHER_POINT_VALUE, _DEFAULT_POINT_VALUE, active_card_id)
+    if card is None:
+        return []
+    balance = card.get("current_points") or 0
+    return [_catalog_candidate(p, card, balance, i + 1)
+            for i, p in enumerate(merchandise_catalog.popular(limit))]
+
+
+def amazon_voucher_candidate(
+    cards: list[dict], active_card_id: str | None = None,
+    budget_inr: float | None = None, rank: int = 1,
+) -> Candidate | None:
+    """The flexible fallback: points → Amazon voucher → buy anything. Offered
+    only when the catalogue misses or the user isn't satisfied with it — the
+    catalogue stays the primary channel."""
+    card, _ = pick_card(cards, CARD_VOUCHER_POINT_VALUE, _DEFAULT_POINT_VALUE, active_card_id)
+    if card is None:
+        return None
     point_value = CARD_VOUCHER_POINT_VALUE.get(card["card_id"], _DEFAULT_POINT_VALUE)
     balance = card.get("current_points") or 0
-    voucher_currency = card.get("currency_name") or "points"
-
-    candidates: list[Candidate] = []
-    for i, p in enumerate(products):
-        points_cost = int(math.ceil(p["price_inr"] / point_value))
-        rating = f"{p['rating']}★" if p.get("rating") else "well-reviewed"
-        candidates.append(Candidate(
-            kind="merchandise",
-            candidate_id=uuid.uuid4().hex[:8],
-            card_id=card["card_id"],
-            card_name=card["card_name"],
-            label=p["title"],
-            category="SHOPPING",
-            points_cost=points_cost,
-            affordable=balance >= points_cost,
-            effective_value_inr=float(p["price_inr"]),
-            best_use_case=f"{rating} · convert {voucher_currency} to an Amazon voucher (~₹{p['price_inr']:,}) & order",
-            source_url=p["url"],
-            note=(None if balance >= points_cost else f"needs {points_cost - balance:,} more points") ,
-            caveat=None if p.get("rating", 5) >= 3.5 else "lower rated — check reviews",
-            rank=i + 1,
-            fulfillment_options=[
-                {"provider_id": "tango_voucher", "label": "Convert points → Amazon voucher & order",
-                 "path": "api", "mode": "live", "currency": "points", "available": True, "note": None},
-                {"provider_id": "demo", "label": "Demo (simulate order)", "path": "demo",
-                 "mode": "demo", "currency": "demo_points", "available": True, "note": None},
-            ],
-            metadata={"brand": p.get("brand"), "thumbnail": p.get("thumbnail"),
-                      "description": p.get("description"), "amazon_live": bool(_AMAZON_KEY)},
-        ))
-    return candidates, suggestion
+    # Denomination: the stated budget if we have one, else what the full balance
+    # is worth (both deterministic — no invented figures).
+    amount_inr = int(budget_inr) if budget_inr else int(balance * point_value)
+    amount_inr = max(100, amount_inr)
+    points_cost = int(math.ceil(amount_inr / point_value))
+    return Candidate(
+        kind="redemption",
+        candidate_id=uuid.uuid4().hex[:8],
+        card_id=card["card_id"],
+        card_name=card["card_name"],
+        label=f"Amazon Voucher — ₹{amount_inr:,}",
+        category="SHOPPING",
+        points_cost=points_cost,
+        affordable=balance >= points_cost,
+        effective_value_inr=float(amount_inr),
+        best_use_case="fully flexible — buy exactly what you want, any brand",
+        source_url=None,
+        note=(None if balance >= points_cost else f"needs {points_cost - balance:,} more points"),
+        caveat=None,
+        rank=rank,
+        fulfillment_options=[
+            {"provider_id": "tango_voucher", "label": "Convert points → Amazon voucher",
+             "path": "api", "mode": "live", "currency": "points", "available": True, "note": None},
+            {"provider_id": "demo", "label": "Demo (simulate voucher)", "path": "demo",
+             "mode": "demo", "currency": "demo_points", "available": True, "note": None},
+        ],
+        metadata={"brand": "Amazon", "icon": "🎟️", "source": "voucher_fallback"},
+    )

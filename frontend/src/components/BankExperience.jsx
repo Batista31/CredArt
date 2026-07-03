@@ -156,6 +156,7 @@ export function BankExperience({ onBack, view = "laptop" }) {
   const [showSettings, setShowSettings] = React.useState(false);
   const [tncCard, setTncCard] = React.useState(null);
   const [activeUserId, setActiveUserId] = React.useState(getActiveUser());
+  const [merchFloor, setMerchFloor] = React.useState(null);
 
   const loaded = React.useRef(false);
   React.useEffect(() => {
@@ -166,7 +167,10 @@ export function BankExperience({ onBack, view = "laptop" }) {
   }, []);
 
   function refreshCards() {
-    api.cards().then((d) => { setUser(d.user); setCards(d.cards || []); }).catch(() => {});
+    api.cards().then((d) => {
+      setUser(d.user); setCards(d.cards || []);
+      setMerchFloor(d.merch_floor_points || null);
+    }).catch(() => {});
   }
 
   function refreshCmr() {
@@ -234,7 +238,7 @@ export function BankExperience({ onBack, view = "laptop" }) {
           </Centered>
         )}
         {screen === "chat" && (
-          <Concierge user={user} card={chatCard} mode={mode} resumeConversationId={resumeConvoId}
+          <Concierge user={user} card={chatCard} mode={mode} resumeConversationId={resumeConvoId} merchFloor={merchFloor}
             onBack={() => { setResumeConvoId(null); go(resumeConvoId ? "history" : "dashboard", "back"); }}
             onRedeem={onRedeem}
             wishlistLabels={wishlistLabels} dismissedLabels={dismissedLabels}

@@ -31,8 +31,10 @@ _JOURNEY_SLOTS: dict[str, dict[str, list[str]]] = {
         "optional": ["room_size", "existing_items", "brand_preference", "priority", "address_needed"],
     },
     "product_purchase": {
-        "required": ["product_category", "budget"],
-        "optional": ["brand_preference", "priority", "points_cash_preference"],
+        # Budget is NOT required: catalogue prices are fixed and shown up front,
+        # so once we know WHAT they want we can recommend immediately.
+        "required": ["product_category"],
+        "optional": ["budget", "brand_preference", "priority", "points_cash_preference"],
     },
     "gift_purchase": {
         "required": ["recipient_type", "occasion", "budget"],
@@ -311,6 +313,25 @@ _NEVER_FOLLOWUP_JOURNEYS = {
     "general_reward_advice", "card_benefit_lookup", "points_expiry_help",
     "cashback_or_statement_credit",
 }
+
+# Merchandise-shaped journeys: catalogue-first, Amazon voucher only as fallback.
+_MERCH_JOURNEYS = {"product_purchase", "merchandise_purchase", "gift_purchase", "home_setup"}
+
+_DISSATISFIED_RE = _re.compile(
+    r"\b(no thanks|not (these|this|that|really)|nothing (else|here|good)|something (else|different)"
+    r"|anything else|other options?|more options?|don'?t (like|want)|didn'?t like|meh|nah|nope"
+    r"|not satisfied|not interested|none of (these|those))\b")
+
+
+def _merch_dissatisfied(message: str) -> bool:
+    """User pushed back on the catalogue results WITHOUT naming a new product.
+    (Naming a product — 'no, show me headphones' — is a new search, not a
+    dissatisfaction signal; the voucher stays a fallback, never the lead.)"""
+    t = (message or "").lower()
+    if not _DISSATISFIED_RE.search(t):
+        return False
+    from .intent import _PRODUCT_WORDS
+    return not any(w in t for w in _PRODUCT_WORDS)
 
 # Card-name aliases the user can say to explicitly switch which card recs use.
 _CARD_SWITCH_ALIASES = {
@@ -655,6 +676,23 @@ async def generate_concierge_response(
             if iso:
                 known_slots[date_slot] = iso
                 break
+    # Merch journeys: deterministically pin the product from the message (same
+    # keyword list intent/_clean_query use) so a clear ask like "buy a coffee
+    # maker" never gets a redundant "what product?" question.
+    if journey_type in _MERCH_JOURNEYS and not known_slots.get("product_category"):
+        # The intent LLM often lands the product under a sibling key — honour it.
+        _alias = known_slots.get("item") or known_slots.get("required_products")
+        if _alias:
+            known_slots["product_category"] = (
+                _alias if isinstance(_alias, str) else " ".join(str(a) for a in _alias))
+        else:
+            from .intent import _PRODUCT_WORDS
+            _msg_l = f"{message} {intent.query or ''}".lower()
+            _generic = {"product", "merchandise", "gadget", "appliance"}
+            for _w in sorted((w for w in _PRODUCT_WORDS if w not in _generic), key=len, reverse=True):
+                if _w in _msg_l:
+                    known_slots["product_category"] = _w
+                    break
     missing_slots = _missing_slots(journey_type, known_slots)
 
     recommendations: list[dict] = []
@@ -673,7 +711,20 @@ async def generate_concierge_response(
     use_planner = (
         journey_type in query_generator.PLANNED_JOURNEYS
         and intent.kind not in ("greeting", "check_expiry", "unknown")
+        # Product already pinned for a merch journey → recommend NOW, don't plan
+        # questions (catalogue prices are fixed; there's nothing left to ask).
+        and not (journey_type in _MERCH_JOURNEYS and known_slots.get("product_category"))
     )
+    # Catalogue results didn't land last turn and the user pushed back without
+    # naming a new product → offer the flexible Amazon voucher (fallback, never
+    # the lead) instead of re-planning questions.
+    voucher_fallback = (
+        prior_response_type == "recommendation"
+        and existing_state.get("journey_type") in _MERCH_JOURNEYS
+        and _merch_dissatisfied(message)
+    )
+    if voucher_fallback:
+        use_planner = False
     plan = None
     confirmation_recap = None
     if use_planner:
@@ -714,7 +765,31 @@ async def generate_concierge_response(
     ask_clarify = (journey_type in _CLARIFY_JOURNEYS and not answering_clarify
                    and not auto_leaned_category
                    and intent.kind not in ("greeting", "check_expiry"))
-    if ask_clarify:
+    if voucher_fallback:
+        from services import merchandise_service
+        _budget_raw = known_slots.get("budget")
+        try:
+            budget_inr = float(str(_budget_raw).replace(",", "").replace("₹", "").strip()) if _budget_raw else None
+        except ValueError:
+            budget_inr = None
+        _v = merchandise_service.amazon_voucher_candidate(
+            cards, active_card_id=effective_card_id, budget_inr=budget_inr)
+        candidates = [_v] if _v else []
+        recommendations = [c.model_dump() for c in candidates]
+        missing_slots = []
+        if candidates:
+            response_type = "recommendation"
+            assistant_message = (
+                "No problem — the catalogue isn't the only way. The flexible route: convert your points to an "
+                "Amazon voucher and buy exactly what you want, any brand, any store. Or describe what you're "
+                "after in a bit more detail and I'll re-search the rewards catalogue for you.")
+            next_actions = ["redeem_best_option", "refine_search"]
+            requires_confirmation = True
+        else:
+            response_type = "general_answer"
+            assistant_message = "Tell me a bit more about what you're looking for and I'll re-search the catalogue."
+            next_actions = ["clarify_goal"]
+    elif ask_clarify:
         response_type = "follow_up_question"
         assistant_message = _clarify_question(journey_type, intent.category)
         missing_slots = [_CLARIFY_MARKER]
@@ -751,7 +826,8 @@ async def generate_concierge_response(
             search_term = known_slots.get("item") or known_slots.get("product_category") or known_slots.get("required_products") or intent.query or message
             if isinstance(search_term, list):
                 search_term = " ".join(str(part) for part in search_term)
-            # Real merchandise via the credits→Amazon-voucher path.
+            # Rewards catalogue first — the bank's own merchandise store is the
+            # primary channel; the Amazon voucher is strictly the fallback.
             from services import merchandise_service
             merch_cands, card_suggestion = await merchandise_service.search_merchandise_candidates(
                 str(search_term), cards, active_card_id=effective_card_id)
@@ -760,34 +836,47 @@ async def generate_concierge_response(
                 recommendations = [c.model_dump() for c in merch_cands]
                 response_type = "recommendation"
                 top = merch_cands[0]
+                n_afford = sum(1 for c in merch_cands if c.affordable)
+                if n_afford:
+                    _fit = (f"{n_afford} of these fit your balance right now — the top pick is a one-tap order. "
+                            if n_afford > 1 else "The top pick fits your balance — it's a one-tap order. ")
+                else:
+                    _fit = ("None of these fit your current balance yet — if you'd rather not wait, "
+                            "an Amazon voucher can stretch what you have. ")
                 assistant_message = (confirmation_recap + " " if confirmation_recap else "") + (
-                    f"Your {top.card_name} points convert to an Amazon voucher, and I found real matches for “{search_term}”. "
-                    f"My pick: {top.label} ({top.best_use_case}). Tap to convert your points and order it.")
+                    f"Straight from your rewards catalogue — real products you can order with points, no browsing. "
+                    f"My pick for “{search_term}”: {top.label} ({top.best_use_case}). {_fit}")
                 assistant_message += _card_switch_note(card_suggestion, known_slots)
                 next_actions = ["review_recommendations", "redeem_best_option"]
                 requires_confirmation = True
             else:
-                # No real product match. Be honest — don't pass unrelated vouchers off as
-                # the item the user asked for. We still surface the bank catalogue (scoped
-                # to the opened card, with a same-consistency fallback), but framed
-                # explicitly as an alternative rather than pretending it's the product.
-                legacy_candidates, trace, meta = await _orchestrate_scoped(intent, user, cards, effective_card_id)
-                candidates = legacy_candidates
-                tool_trace = [t.model_dump() for t in trace]
-                recommendations = [c.model_dump() for c in legacy_candidates]
+                # Catalogue miss. Be honest, then give two real ways forward:
+                # the flexible Amazon voucher (buy it anywhere) and the
+                # catalogue's bestsellers so the store stays in front of them.
+                _voucher = merchandise_service.amazon_voucher_candidate(
+                    cards, active_card_id=effective_card_id)
+                _best = merchandise_service.popular_catalog_candidates(
+                    cards, active_card_id=effective_card_id)
+                fallback_cands = ([_voucher] if _voucher else []) + _best
+                for _i, _c in enumerate(fallback_cands):
+                    _c.rank = _i + 1
+                candidates = fallback_cands
+                recommendations = [c.model_dump() for c in fallback_cands]
                 _term = str(search_term).strip()
-                _honest = f"I couldn't find real “{_term}” listings I can redeem your points against right now. "
                 _recap = (confirmation_recap + " ") if confirmation_recap else ""
-                if legacy_candidates:
+                if fallback_cands:
                     response_type = "recommendation"
-                    assistant_message = _recap + _honest + (
-                        "Here are voucher options you could put toward it instead — an Amazon or "
-                        "shopping voucher can be used to buy one directly:")
+                    assistant_message = _recap + (
+                        f"“{_term}” isn't in your rewards catalogue right now. Two ways forward: take an "
+                        "Amazon voucher and buy it anywhere you like, or browse the catalogue's most popular "
+                        "rewards below — all orderable with your points today.")
                     next_actions = ["compare_options", "redeem_best_option"]
+                    requires_confirmation = True
                 else:
                     response_type = "general_answer"
-                    assistant_message = _recap + _honest + (
-                        "Want me to try a different product, or look at another way to use your points?")
+                    assistant_message = _recap + (
+                        f"“{_term}” isn't in the catalogue right now. Want me to try a different product, "
+                        "or look at another way to use your points?")
                     next_actions = ["clarify_goal"]
         else:
             # Real flight options (Duffel) / storefront hotel options when bookable.

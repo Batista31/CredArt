@@ -35,7 +35,12 @@ _PRODUCT_WORDS = ["phone", "smartphone", "iphone", "laptop", "macbook", "tablet"
                   # kitchen / home appliances
                   "cooker", "microwave", "oven", "refrigerator", "fridge", "washing machine",
                   "air fryer", "airfryer", "toaster", "kettle", "grinder", "vacuum cleaner",
-                  "cooktop", "induction", "geyser", "air conditioner", "dishwasher", "purifier"]
+                  "cooktop", "induction", "geyser", "air conditioner", "dishwasher", "purifier",
+                  # rewards-catalogue merchandise (merchandise_catalog.py)
+                  "coffee maker", "coffeemaker", "coffee machine", "brewer", "grill", "grilling",
+                  "steamer", "water jet", "flosser", "heating pad", "massager", "sound machine",
+                  "white noise", "luggage", "suitcase", "trolley", "bottle", "flask",
+                  "dinner set", "crockery", "tote", "earphone", "earbuds"]
 
 CITY_TO_IATA = {
     "bangalore": "BLR", "bengaluru": "BLR", "mumbai": "BOM", "bombay": "BOM",

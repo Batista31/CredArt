@@ -40,6 +40,7 @@ function OptionCard({ cand, mode, onRedeem, wishlisted, dismissed, onWishlist, o
   const opts = cand.fulfillment_options || [];
   const pts = cand.points_cost;
   const thumb = cand.metadata && cand.metadata.thumbnail;
+  const icon = cand.metadata && cand.metadata.icon;
   return (
     <div style={{
       display: "flex", flexDirection: "column", gap: 11, padding: 13, background: "#fff",
@@ -51,9 +52,11 @@ function OptionCard({ cand, mode, onRedeem, wishlisted, dismissed, onWishlist, o
             style={{ width: 68, height: 68, borderRadius: 12, objectFit: "cover", flexShrink: 0,
               background: "var(--surface)", border: "1px solid var(--hairline)" }} />
         ) : (
-          <div style={{ width: 42, height: 42, borderRadius: 12, background: "var(--brand-600)",
-            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#fff", fontWeight: 800, fontSize: 16 }}>
-            {(cand.label || "?").slice(0, 1)}
+          <div style={{ width: 42, height: 42, borderRadius: 12,
+            background: icon ? "var(--brand-100)" : "var(--brand-600)",
+            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+            color: "#fff", fontWeight: 800, fontSize: icon ? 22 : 16 }}>
+            {icon || (cand.label || "?").slice(0, 1)}
           </div>
         )}
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -127,7 +130,7 @@ function OptionCard({ cand, mode, onRedeem, wishlisted, dismissed, onWishlist, o
   );
 }
 
-export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, dismissedLabels, onWishlist, onDismiss, resumeConversationId }) {
+export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, dismissedLabels, onWishlist, onDismiss, resumeConversationId, merchFloor }) {
   const cardName = card?.card_name || "Concierge";
   const isMillennia = card?.card_id === "hdfc_millennia";
   const headerPts = card ? card.current_points : (user?.cards || []).reduce?.((a, c) => a + (c.current_points || 0), 0);
@@ -151,8 +154,14 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
   const started = React.useRef(false);
 
   function introMessage() {
-    return { id: nid(), who: "bot", intro: true,
-      text: `Hi ${(user?.name || "there").split(" ")[0]} — I'm CredArt, your ${cardName} concierge. What would you like to do with your points?` };
+    let text = `Hi ${(user?.name || "there").split(" ")[0]} — I'm CredArt, your ${cardName} concierge. What would you like to do with your points?`;
+    // Low-balance heads-up, up front — both numbers are real (card balance from
+    // /cards, floor = cheapest catalogue item), never invented.
+    const pts = card?.current_points;
+    if (card && merchFloor && pts != null && pts < merchFloor) {
+      text += ` Heads up: this card has ${pts.toLocaleString()} pts and catalogue rewards start at ${merchFloor.toLocaleString()} pts — I'll focus on what fits your balance, and a voucher can bridge the gap if you spot something bigger.`;
+    }
+    return { id: nid(), who: "bot", intro: true, text };
   }
   function showIntro() {
     setConversationId(null); setSessionId(null); setMessages([introMessage()]);
