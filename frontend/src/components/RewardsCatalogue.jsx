@@ -13,7 +13,7 @@
  */
 import React from "react";
 import { USERS, getActiveUser, setActiveUser } from "../lib/api.js";
-import { CATEGORY_META, CATALOGUE, CAT_PERSONAS, personaFor, fmtPts } from "../lib/catalogue.js";
+import { CATEGORY_META, CATALOGUE, CAT_PERSONAS, personaFor, fmtPts, visualFor, onImgError, rewardImgStyle } from "../lib/catalogue.js";
 import { CredArtBubble } from "./CredArtBubble.jsx";
 import { RewardsCheckout } from "./RewardsCheckout.jsx";
 
@@ -188,8 +188,8 @@ function ItemCard({ item, theme, balance, onView, delay }) {
         transform: hover ? "translateY(-4px)" : "none", transition: "transform .16s ease, box-shadow .16s ease" }}>
       <div style={{ position: "relative", height: 150, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", borderBottom: "1px solid var(--brand-50)" }}>
         <img src={item.image} alt={item.name} loading="lazy"
-          onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
-          style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          onError={onImgError(item)}
+          style={{ width: "100%", height: "100%", ...rewardImgStyle(item) }} />
         {/* affordability, surfaced BEFORE the user commits to anything */}
         {over && (
           <span title={`You need ${fmt(item.points - balance)} more points for this`}
@@ -237,8 +237,8 @@ function DetailModal({ item, theme, inCart, balance, cartTotal, onClose, onAddTo
       <div onClick={(e) => e.stopPropagation()} className="no-sb" style={{ width: "min(460px, 100%)", maxHeight: "94%", overflowY: "auto",
         background: "#fff", borderRadius: 18, overflow: "hidden", boxShadow: "0 30px 70px rgba(8,28,51,0.5)", animation: "sheetUp .26s cubic-bezier(.2,.8,.2,1)" }}>
         <div style={{ position: "relative", height: 200, background: "var(--brand-50)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <img src={item.image} alt={item.name} style={{ width: "100%", height: "100%", objectFit: "cover" }}
-            onError={(e) => { e.currentTarget.style.visibility = "hidden"; }} />
+          <img src={item.image} alt={item.name} style={{ width: "100%", height: "100%", ...rewardImgStyle(item) }}
+            onError={onImgError(item)} />
           <span style={{ position: "absolute", top: 12, left: 12, fontSize: 10.5, fontWeight: 800, color: "#fff",
             background: theme.cardGrad, padding: "4px 11px", borderRadius: 999, textTransform: "capitalize" }}>{item.categoryLabel || item.category}</span>
           <button className="tap" onClick={onClose} style={{ position: "absolute", top: 12, right: 12, width: 32, height: 32,
@@ -252,7 +252,13 @@ function DetailModal({ item, theme, inCart, balance, cartTotal, onClose, onAddTo
           <div style={{ fontSize: 13.5, color: "var(--ink-2)", margin: "8px 0 4px" }}>
             Starting At <b className="num" style={{ color: "var(--brand-800)", fontSize: 20 }}>{fmt(item.points)}</b> Points
           </div>
-          <p style={{ margin: "12px 0 18px", color: "var(--ink-2)", fontSize: 13.5, lineHeight: 1.55 }}>{item.desc}</p>
+          {/* one small piece of info about the reward, shown on View Details */}
+          <div style={{ margin: "14px 0 18px" }}>
+            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 0.8, color: "var(--brand-400)", textTransform: "uppercase", marginBottom: 5 }}>
+              About this reward
+            </div>
+            <p style={{ margin: 0, color: "var(--ink-2)", fontSize: 13.5, lineHeight: 1.55 }}>{item.desc}</p>
+          </div>
 
           {added ? (
             <div style={{ background: "var(--green-bg)", border: "1px solid rgba(22,185,129,0.3)", borderRadius: 12, padding: "14px 16px" }}>
@@ -324,7 +330,7 @@ function CartPanel({ theme, cart, balance, onRemove, onBeginCheckout, onClose })
             </div>
           ) : cart.map((it) => (
             <div key={it.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "9px 8px", borderRadius: 10 }}>
-              <img src={it.image} alt="" style={{ width: 42, height: 42, borderRadius: 8, objectFit: "cover", flexShrink: 0, background: "var(--brand-50)" }} />
+              <img src={it.image} alt="" onError={onImgError(it)} style={{ width: 42, height: 42, borderRadius: 8, flexShrink: 0, background: "var(--brand-50)", ...rewardImgStyle(it) }} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--brand-800)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</div>
                 <div className="num" style={{ fontSize: 11, color: "var(--ink-3)" }}>{fmtPts(it.points)}</div>
@@ -366,10 +372,10 @@ function CategoryView({ theme, meta, balance, onView, onBack }) {
   const [sortOpen, setSortOpen] = React.useState(false);
 
   const items = React.useMemo(() => {
-    let list = CATALOGUE[meta.key].map((it) => ({
-      ...it, category: meta.key, categoryLabel: meta.label,
-      image: `https://picsum.photos/seed/${encodeURIComponent(it.slug)}/320/220`,
-    }));
+    let list = CATALOGUE[meta.key].map((it) => {
+      const base = { ...it, category: meta.key, categoryLabel: meta.label };
+      return { ...base, ...visualFor(base) };  // image + logo/photo fallbacks
+    });
     const q = query.trim().toLowerCase();
     if (q) list = list.filter((i) => i.name.toLowerCase().includes(q));
     if (sort === "low") list = [...list].sort((a, b) => a.points - b.points);
@@ -565,7 +571,9 @@ export function RewardsCatalogue({ theme, initialCategory = null, onExit }) {
       {/* floating concierge */}
       <CredArtBubble persona={persona} balance={balance} cartCount={cart.length}
         cartTotal={cart.reduce((a, i) => a + i.points, 0)}
-        onAddToCart={addToCart} onViewItem={viewFromChat} view="laptop" />
+        onAddToCart={addToCart} onViewItem={viewFromChat}
+        onCheckout={() => { if (cart.length === 0) return; setModalItem(null); setShowCart(false); setCheckingOut(true); }}
+        view="laptop" />
     </div>
   );
 }

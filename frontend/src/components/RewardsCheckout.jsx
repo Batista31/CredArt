@@ -16,6 +16,7 @@
 import React from "react";
 import { api } from "../lib/api.js";
 import { Kobie } from "./Kobie.jsx";
+import { onImgError, rewardImgStyle } from "../lib/catalogue.js";
 
 const fmt = (n) => Number(n).toLocaleString("en-IN");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -190,7 +191,7 @@ function AddressStep({ persona, cmr, cmrLive, merchandise, onConfirm, onCancel }
           {merchandise.map((it) => (
             <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 9, background: "#fff", borderRadius: 10,
               border: "1px solid var(--brand-100)", padding: "8px 10px" }}>
-              <img src={it.image} alt="" style={{ width: 32, height: 32, borderRadius: 7, objectFit: "cover", background: "var(--brand-50)" }} />
+              <img src={it.image} alt="" onError={onImgError(it)} style={{ width: 32, height: 32, borderRadius: 7, background: "var(--brand-50)", ...rewardImgStyle(it) }} />
               <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ink)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
               <span className="num" style={{ fontSize: 11.5, color: "var(--ink-3)", flexShrink: 0 }}>{fmt(it.points)} pts</span>
             </div>

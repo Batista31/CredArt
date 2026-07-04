@@ -369,6 +369,50 @@ def _route_clarify_answer(text: str) -> tuple[str | None, str | None]:
     return (None, None)
 
 
+# --- Mid-conversation intent switching --------------------------------------
+# While we're slot-filling one journey, the user may pivot to a completely
+# different intent ("actually, show me a camera" during trip planning). Without
+# this, the pivot message would be forced into the current journey's next slot.
+# We detect a clearly-different, concrete intent from the raw message and re-route
+# to it (resetting the abandoned journey's slots). A plain slot answer (a city,
+# a date, "economy") carries none of these signals and stays in the flow.
+_SWITCH_PRODUCT_WORDS = [
+    "camera", "headphone", "earphone", "earbud", "airpod", "laptop", "macbook",
+    "tablet", "ipad", "smartwatch", "fitbit", "speaker", "soundbar", "television",
+    "tv", "vacuum", "air fryer", "airfryer", "coffee maker", "nespresso", "drone",
+    "gopro", "playstation", "xbox", "kindle", "printer", "trimmer", "shaver",
+    "hair dryer", "purifier", "microwave", "cooker", "mixer", "grinder", "power bank",
+    "backpack", "trolley", "suitcase", "sneaker", "sunglasses", "dyson", "phone",
+    "smartphone", "iphone", "monitor", "keyboard", "gadget", "merchandise",
+    "electronics", "appliance",
+]
+# Ordered: the first group whose keyword appears (and differs from the current
+# journey) wins. Each entry: (journey_type, category_or_None, keywords).
+_INTENT_SWITCHES: list[tuple[str, str | None, list[str]]] = [
+    ("product_purchase", "SHOPPING", _SWITCH_PRODUCT_WORDS),
+    ("voucher_redemption", "SHOPPING",
+     ["gift card", "gift cards", "gift voucher", "voucher", "amazon", "flipkart", "myntra", "nykaa"]),
+    ("cashback_or_statement_credit", None, ["cashback", "cash back", "statement credit"]),
+    ("travel_hotel", None, ["hotel", "resort", "accommodation"]),
+    ("travel_flight", None, ["flight", "fly", "airfare", "air ticket", "plan a trip", "book a trip"]),
+]
+
+
+def _detect_intent_switch(message: str, current_journey: str | None) -> tuple[str | None, str | None, str | None]:
+    """If the message clearly names a DIFFERENT concrete intent than the journey we
+    are mid-slot-filling, return (new_journey_type, category, matched_keyword).
+    Whole-word match (so "tv" doesn't fire inside "Latvia"; plurals allowed).
+    Returns (None, None, None) when nothing clearly different is named."""
+    t = (message or "").lower()
+    for jt, cat, words in _INTENT_SWITCHES:
+        if jt == current_journey:
+            continue
+        for w in words:
+            if _re.search(rf"\b{_re.escape(w)}(?:es|s)?\b", t):
+                return jt, cat, w
+    return None, None, None
+
+
 # Preference-weight column -> the category we'd recommend if that weight dominates.
 # (cashback is deliberately excluded — a cashback lean routes to its own journey, not a
 # category-filtered recommendation, and it's never a demo persona's top weight.)
@@ -478,6 +522,8 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
     # Category currently being shown via a lean/clarify route (drives switch chips + lead).
     auto_leaned_category: str | None = None
     switch_context_category: str | None = None
+    # Set when the user pivots to a different concrete intent mid-slot-filling.
+    switched_intent = False
     # Did the user just answer a clarifying "what are you leaning toward?" question — OR tap a
     # "switch lane" chip we offered under a personalized (leaned) recommendation last turn?
     answering_clarify = (prior_response_type == "follow_up_question"
@@ -495,10 +541,29 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
         if journey_type == "card_benefit_lookup" and routed_cat:
             switch_context_category = routed_cat
     elif prior_response_type == "follow_up_question" and existing_state.get("journey_type"):
-        journey_type = existing_state["journey_type"]
+        # Mid-slot-filling: keep the established journey so plain answers ("Mumbai",
+        # "2 people") don't re-classify — UNLESS the user clearly pivots to a
+        # different intent ("actually, a camera"), in which case re-route to it.
+        _prev_journey = existing_state["journey_type"]
+        _sw_jt, _sw_cat, _sw_word = _detect_intent_switch(message, _prev_journey)
+        if _sw_jt:
+            journey_type = _sw_jt
+            switched_intent = True
+            if _sw_cat:
+                intent.category = _sw_cat
+            # Seed the product the user named so we don't re-ask "what product?".
+            if _sw_jt == "product_purchase" and _sw_word:
+                intent.slots = {**(intent.slots or {}), "product_category": _sw_word}
+        else:
+            journey_type = _prev_journey
     else:
         journey_type = intent.journey_type or existing_state.get("journey_type") or "general_reward_advice"
-    known_slots = _merge_slots(existing_state.get("known_slots") or {}, intent.slots)
+    # On a mid-conversation switch, start the NEW journey's slots clean — the old
+    # journey's answers (a flight's destination/origin) don't belong to it.
+    if switched_intent:
+        known_slots = dict(intent.slots or {})
+    else:
+        known_slots = _merge_slots(existing_state.get("known_slots") or {}, intent.slots)
     # Only pull in memory preferences RELEVANT to this journey, so travel slots from a
     # past session don't pollute (e.g.) a voucher conversation.
     _reqs = _journey_requirements(journey_type)
@@ -515,15 +580,16 @@ async def generate_concierge_response(user_id: str, message: str, conversation_i
     # Safety net: if the prior turn asked for slots and the LLM extracted nothing for any
     # of them, assign the user's reply to the first still-missing asked slot so the
     # follow-up loop always makes progress instead of re-asking the same question.
-    if prior_response_type == "follow_up_question" and not answering_clarify:
+    if prior_response_type == "follow_up_question" and not answering_clarify and not switched_intent:
         _prev_missing = existing_state.get("missing_slots") or []
         _still = [s for s in _prev_missing if known_slots.get(s) in (None, "", [])]
         if _prev_missing and len(_still) == len(_prev_missing) and message.strip():
             known_slots[_still[0]] = message.strip()
-    # Answered a clarify with a domain word ("travel"/"dining") → recommend that category
-    # now. Prime the intent so orchestrate assembles candidates (booking routes like
-    # travel_flight are handled by their own slot-filling instead).
-    if answering_clarify and journey_type not in (
+    # Answered a clarify with a domain word ("travel"/"dining") — OR pivoted mid-flow
+    # to a recommend-directly intent (e.g. cashback) — → recommend that category now.
+    # Prime the intent so orchestrate assembles candidates. Booking/product routes
+    # (travel_flight/hotel, product/gift/merchandise) keep their own slot-filling.
+    if (answering_clarify or switched_intent) and journey_type not in (
             "travel_flight", "travel_hotel", "product_purchase", "gift_purchase", "merchandise_purchase"):
         if intent.kind in ("greeting", "check_expiry", "unknown"):
             intent.kind = "explore_benefits"

@@ -14,7 +14,7 @@
 import React from "react";
 import { api } from "../lib/api.js";
 import { KobieAvatar } from "./Kobie.jsx";
-import { runConcierge, greetingFor, CHAT_CHIPS, fmtPts } from "../lib/catalogue.js";
+import { runConcierge, greetingFor, CHAT_CHIPS, fmtPts, onImgError, rewardImgStyle } from "../lib/catalogue.js";
 
 const fmt = (n) => Number(n).toLocaleString("en-IN");
 
@@ -56,10 +56,10 @@ function InlineItem({ item, budget, onAsk, onView }) {
       border: "1.5px solid var(--hairline)", boxShadow: "var(--sh-sm)",
       opacity: affordable ? 1 : 0.92 }}>
       <img src={item.image} alt={item.name} loading="lazy"
-        onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
-        style={{ width: 52, height: 52, borderRadius: 10, objectFit: "cover", flexShrink: 0,
+        onError={onImgError(item)}
+        style={{ width: 52, height: 52, borderRadius: 10, flexShrink: 0,
           background: "var(--brand-100)", border: "1px solid var(--hairline)",
-          filter: affordable ? "none" : "grayscale(0.5)" }} />
+          filter: affordable ? "none" : "grayscale(0.5)", ...rewardImgStyle(item) }} />
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
         <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--ink)", lineHeight: 1.25 }}>{item.name}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
@@ -89,7 +89,7 @@ function InlineItem({ item, budget, onAsk, onView }) {
   );
 }
 
-export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, onAddToCart, onViewItem, view = "laptop" }) {
+export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, onAddToCart, onViewItem, onCheckout, view = "laptop" }) {
   const [open, setOpen] = React.useState(false);
   const idc = React.useRef(0);
   const nid = () => ++idc.current;
@@ -107,6 +107,8 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
   balRef.current = balance;
   const cartRef = React.useRef(cartTotal);
   cartRef.current = cartTotal;
+  const cartCountRef = React.useRef(cartCount);
+  cartCountRef.current = cartCount;
   const flowRef = React.useRef(flow);
   flowRef.current = flow;
 
@@ -130,8 +132,16 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
     if (!text || busy) return;
     push({ who: "user", text });
     setBusy(true);
-    const local = runConcierge(text, { persona, balance: balRef.current, cartTotal: cartRef.current, flow: flowRef.current });
+    const local = runConcierge(text, { persona, balance: balRef.current, cartTotal: cartRef.current, cartCount: cartCountRef.current, flow: flowRef.current });
     setFlow(local.flow || null);
+
+    // Chat-driven checkout: acknowledge, then launch the OTP-secured cart checkout.
+    if (local.action === "checkout") {
+      push({ who: "bot", text: local.reply });
+      setBusy(false);
+      if (onCheckout) { setOpen(false); onCheckout(); }
+      return;
+    }
 
     if (local.reply != null) {
       // Local engine handled it — coherent reply + real catalogue cards.
@@ -162,8 +172,8 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
       return;
     }
     push({ who: "bot", text:
-      `🛒 Added the ${item.name} (${fmtPts(item.points)}) to your cart — you now have ${res.count} item${res.count > 1 ? "s" : ""} ready. Open the cart in the top bar to checkout, or keep exploring.`,
-      chips: CHAT_CHIPS.slice(1) });
+      `🛒 Added the ${item.name} (${fmtPts(item.points)}) to your cart — you now have ${res.count} item${res.count > 1 ? "s" : ""} ready. Just say “redeem my cart” and I'll check you out, or keep exploring.`,
+      chips: ["Redeem my cart", ...CHAT_CHIPS.slice(1)] });
   }
 
   function handleView(item) { onViewItem && onViewItem(item); setOpen(false); }
