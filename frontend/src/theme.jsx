@@ -113,6 +113,36 @@ export const THEMES = {
       chips: ["Book movie tickets", "IMAX upgrade", "OTT subscription", "Comedy night pass"],
     },
   },
+
+  /* ---------- Rewards Catalogue (Kobie / Navy Federal style) — Navy + Gold ---------- */
+  rewards: {
+    key: "rewards",
+    name: "Rewards Catalogue",
+    brand: "Powered by CredArt",
+    tagline: "Browse & redeem your points like a premium store — with a CredArt concierge on tap",
+    icon: "gift",
+    accent: "#E8901E",   // warm gold / orange
+    accentInk: "#3A2606",
+    slate: "#5F7D91",    // muted slate for "View Details" / "Filter & Sort" pills
+    slateDk: "#4E6B7E",
+    outerBg: "#F4F6FA",
+    cardGrad: "linear-gradient(135deg,#123B6B,#0C2748)",
+    vars: {
+      "--brand-950": "#081C33",
+      "--brand-900": "#0C2748",
+      "--brand-800": "#0F3059",
+      "--brand-700": "#123B6B",
+      "--brand-600": "#1B4E87",
+      "--brand-500": "#2C63A8",
+      "--brand-400": "#5A85C0",
+      "--brand-300": "#93B1D8",
+      "--brand-200": "#C4D5EC",
+      "--brand-100": "#E3ECF7",
+      "--brand-50": "#F2F6FB",
+      "--bg": "#F4F6FA",
+    },
+    meta: null, // the catalogue manages its own personas + hardcoded data
+  },
 };
 
 /* Small inline icon set used on the landing cards + chat headers. */
@@ -125,6 +155,10 @@ export function CategoryIcon({ name, size = 26, color = "#fff" }) {
   if (name === "food")
     return (
       <svg {...p}><path d="M4 11h16v1a6 6 0 0 1-6 6h-4a6 6 0 0 1-6-6v-1z" stroke={color} strokeWidth="1.7" strokeLinejoin="round" /><path d="M6 11c0-3.3 2.7-5 6-5s6 1.7 6 5" stroke={color} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /><path d="M3.5 21h17" stroke={color} strokeWidth="1.7" strokeLinecap="round" /></svg>
+    );
+  if (name === "gift")
+    return (
+      <svg {...p}><rect x="3" y="8" width="18" height="4" rx="1" stroke={color} strokeWidth="1.8" /><path d="M5 12v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8M12 8v13" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /><path d="M12 8S10.5 3.5 8 4.2C6.2 4.7 6.5 7.2 8.4 7.7 10 8.1 12 8 12 8zM12 8s1.5-4.5 4-3.8c1.8.5 1.5 3-.4 3.5C14 8.1 12 8 12 8z" stroke={color} strokeWidth="1.6" strokeLinejoin="round" /></svg>
     );
   // film
   return (

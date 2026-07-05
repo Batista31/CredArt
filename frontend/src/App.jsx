@@ -16,6 +16,7 @@ import { THEMES } from "./theme.jsx";
 import { Landing } from "./components/Landing.jsx";
 import { BankExperience } from "./components/BankExperience.jsx";
 import { CategoryChat } from "./components/CategoryChat.jsx";
+import { RewardsApp } from "./components/RewardsApp.jsx";
 import { IOSDevice } from "./components/IOSDevice.jsx";
 
 /* Floating laptop / mobile switch — fixed top-right, visible on every screen. */
@@ -59,9 +60,13 @@ export default function App() {
     <div key={category} style={{
       minHeight: mobile ? "100%" : "100vh", height: mobile ? "100%" : undefined,
       background: THEMES[category].outerBg, ...THEMES[category].vars }}>
-      {category === "bank"
-        ? <BankExperience view={view} onBack={back} />
-        : <CategoryChat theme={THEMES[category]} view={view} onBack={back} />}
+      {category === "bank" ? (
+        <BankExperience view={view} onBack={back} />
+      ) : category === "rewards" ? (
+        <RewardsApp theme={THEMES[category]} onBack={back} />
+      ) : (
+        <CategoryChat theme={THEMES[category]} view={view} onBack={back} />
+      )}
     </div>
   );
 

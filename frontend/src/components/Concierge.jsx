@@ -154,7 +154,7 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
   const started = React.useRef(false);
 
   function introMessage() {
-    let text = `Hi ${(user?.name || "there").split(" ")[0]} — I'm CredArt, your ${cardName} concierge. What would you like to do with your points?`;
+    let text = `Hi ${(user?.name || "there").split(" ")[0]} — CredArt here. Let's make your points count ✨`;
     // Low-balance heads-up, up front — both numbers are real (card balance from
     // /cards, floor = cheapest catalogue item), never invented.
     const pts = card?.current_points;
@@ -250,7 +250,7 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
           <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: -0.2 }}>CredArt</div>
           <div style={{ fontSize: 11.5, opacity: 0.78, display: "flex", alignItems: "center", gap: 5 }}>
             <span style={{ width: 6, height: 6, borderRadius: 99, background: "#5BE6A4" }} />
-            HDFC {cardName} · concierge
+            HDFC{card ? ` ${cardName}` : ""} · concierge
           </div>
         </div>
         <button className="tap" onClick={openHistory} title="Conversation history" style={{ background: "rgba(255,255,255,0.14)", border: "none", width: 36, height: 36,
