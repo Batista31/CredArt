@@ -21,6 +21,23 @@ const fmt = (n) => Number(n).toLocaleString("en-IN");
 const newRef = () => `CRD-KBE-${Math.random().toString(16).slice(2, 6).toUpperCase()}`;
 const ACCT = { Riya: "4502", Samyak: "4501" };
 
+/* ---------------- persist store state across reloads (localStorage only) ----------------
+   The Rewards Catalogue is intentionally a self-contained demo bucket — it never reads or
+   writes the bank's Postgres ledger (see CLAUDE.md). But a plain in-memory React state means
+   every page refresh silently resets balances/carts back to the seed values, which reads as
+   "the frontend and DB don't correspond" even though there's no DB involved here at all. This
+   just makes the DEMO STATE survive a reload/localhost-restart, without touching the DB. */
+const STORE_KEY = "credart:store:state:v1";
+function loadPersisted() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+function savePersisted(balances, carts) {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ balances, carts })); } catch { /* ignore quota/private-mode errors */ }
+}
+
 /* ---------------- category line icons ---------------- */
 function CatIcon({ name, size = 34, color }) {
   const s = { width: size, height: size, viewBox: "0 0 24 24", fill: "none",
@@ -307,10 +324,16 @@ function DetailModal({ item, theme, inCart, balance, cartTotal, onClose, onAddTo
 }
 
 /* ---------------- cart panel ---------------- */
-function CartPanel({ theme, cart, balance, onRemove, onBeginCheckout, onClose }) {
-  const total = cart.reduce((a, i) => a + i.points, 0);
+function CartPanel({ theme, cart, balance, onRemove, onChangeQty, onBeginCheckout, onClose }) {
+  const total = cart.reduce((a, i) => a + i.points * (i.qty || 1), 0);
   const affordable = total <= balance && cart.length > 0;
   const hasDelivery = cart.some((i) => i.category === "merchandise");
+  const [qtyErr, setQtyErr] = React.useState(null);
+
+  function bumpQty(id, delta) {
+    const r = onChangeQty(id, delta);
+    setQtyErr(r && !r.ok ? r.reason : null);
+  }
 
   return (
     <div onClick={onClose} style={{ position: "absolute", inset: 0, zIndex: 65, background: "rgba(8,28,51,0.24)", animation: "fadeIn .16s ease" }}>
@@ -328,21 +351,40 @@ function CartPanel({ theme, cart, balance, onRemove, onBeginCheckout, onClose })
             <div style={{ padding: 22, textAlign: "center", color: "var(--ink-3)", fontSize: 13 }}>
               Your cart is empty — add a reward or ask the CredArt concierge.
             </div>
-          ) : cart.map((it) => (
-            <div key={it.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "9px 8px", borderRadius: 10 }}>
-              <img src={it.image} alt="" onError={onImgError(it)} style={{ width: 42, height: 42, borderRadius: 8, flexShrink: 0, background: "var(--brand-50)", ...rewardImgStyle(it) }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--brand-800)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</div>
-                <div className="num" style={{ fontSize: 11, color: "var(--ink-3)" }}>{fmtPts(it.points)}</div>
+          ) : cart.map((it) => {
+            const qty = it.qty || 1;
+            return (
+              <div key={it.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "9px 8px", borderRadius: 10 }}>
+                <img src={it.image} alt="" onError={onImgError(it)} style={{ width: 42, height: 42, borderRadius: 8, flexShrink: 0, background: "var(--brand-50)", ...rewardImgStyle(it) }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--brand-800)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</div>
+                  <div className="num" style={{ fontSize: 11, color: "var(--ink-3)" }}>{fmtPts(it.points)} × {qty} = {fmt(it.points * qty)} pts</div>
+                </div>
+                {/* qty stepper — increasing is budget-gated by onChangeQty */}
+                <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                  <button className="tap" onClick={() => bumpQty(it.id, -1)} title="Decrease quantity" style={{ width: 22, height: 22, borderRadius: 999,
+                    border: "1px solid var(--brand-100)", background: "#fff", color: "var(--brand-700)", cursor: "pointer",
+                    display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13, lineHeight: 1 }}>−</button>
+                  <span className="num" style={{ minWidth: 16, textAlign: "center", fontSize: 12, fontWeight: 800, color: "var(--brand-800)" }}>{qty}</span>
+                  <button className="tap" onClick={() => bumpQty(it.id, 1)} title="Increase quantity" style={{ width: 22, height: 22, borderRadius: 999,
+                    border: "1px solid var(--brand-100)", background: "#fff", color: "var(--brand-700)", cursor: "pointer",
+                    display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13, lineHeight: 1 }}>+</button>
+                </div>
+                <button className="tap" onClick={() => onRemove(it.id)} title="Remove" style={{ width: 26, height: 26, borderRadius: 999,
+                  border: "1px solid var(--brand-100)", background: "#fff", color: "var(--ink-3)", cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <svg width="12" height="12" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" /></svg>
+                </button>
               </div>
-              <button className="tap" onClick={() => onRemove(it.id)} title="Remove" style={{ width: 26, height: 26, borderRadius: 999,
-                border: "1px solid var(--brand-100)", background: "#fff", color: "var(--ink-3)", cursor: "pointer",
-                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                <svg width="12" height="12" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" /></svg>
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
+        {qtyErr && (
+          <div style={{ margin: "0 12px 8px", padding: "9px 12px", borderRadius: 10, background: "var(--amber-bg)",
+            border: "1px solid rgba(242,162,59,0.4)", color: "#8A5A12", fontSize: 12, fontWeight: 600 }}>
+            ⚠ {qtyErr}
+          </div>
+        )}
         {cart.length > 0 && (
           <div style={{ padding: "12px 16px 16px", borderTop: "1px solid var(--brand-50)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: "var(--ink-2)", marginBottom: 8 }}>
@@ -452,14 +494,24 @@ function CategoryView({ theme, meta, balance, onView, onBack }) {
 /* ---------------- main ---------------- */
 export function RewardsCatalogue({ theme, initialCategory = null, onExit }) {
   const [activeUserId, setActiveUserId] = React.useState(getActiveUser());
-  const [balances, setBalances] = React.useState(() =>
-    Object.fromEntries(Object.values(CAT_PERSONAS).map((p) => [p.id, p.points])));
+  const [balances, setBalances] = React.useState(() => {
+    const persisted = loadPersisted();
+    const seed = Object.fromEntries(Object.values(CAT_PERSONAS).map((p) => [p.id, p.points]));
+    return persisted && persisted.balances ? { ...seed, ...persisted.balances } : seed;
+  });
   const [categoryKey, setCategoryKey] = React.useState(initialCategory);
   const [modalItem, setModalItem] = React.useState(null);
-  const [carts, setCarts] = React.useState(() =>
-    Object.fromEntries(Object.values(CAT_PERSONAS).map((p) => [p.id, []])));
+  const [carts, setCarts] = React.useState(() => {
+    const persisted = loadPersisted();
+    const seed = Object.fromEntries(Object.values(CAT_PERSONAS).map((p) => [p.id, []]));
+    return persisted && persisted.carts ? { ...seed, ...persisted.carts } : seed;
+  });
   const [showCart, setShowCart] = React.useState(false);
   const [checkingOut, setCheckingOut] = React.useState(false);
+
+  // Persist demo balances/carts on every change so a reload/localhost restart
+  // resumes exactly where the user left off (localStorage only — no DB write).
+  React.useEffect(() => { savePersisted(balances, carts); }, [balances, carts]);
 
   const persona = personaFor(activeUserId);
   const balance = balances[activeUserId];
@@ -478,23 +530,53 @@ export function RewardsCatalogue({ theme, initialCategory = null, onExit }) {
   /* Every "redeem" action now adds to a per-persona cart instead of spending
      points immediately — checkout happens explicitly from the cart panel.
      Affordability is enforced HERE, up front: the user is told they're short
-     the moment they try to add, never after walking through checkout. */
+     the moment they try to add, never after walking through checkout. Each
+     cart line carries a `qty` (default 1) — adding an item already in the
+     cart bumps its quantity by one instead of rejecting it as a duplicate. */
+  const cartTotal = (list) => list.reduce((a, i) => a + i.points * (i.qty || 1), 0);
+
   function addToCart(item) {
-    if (cart.some((i) => i.id === item.id)) return { ok: false, reason: "This item is already in your cart." };
     const bal = balances[activeUserId];
-    const subtotal = cart.reduce((a, i) => a + i.points, 0);
-    if (subtotal + item.points > bal) {
-      const short = subtotal + item.points - bal;
+    const existing = cart.find((i) => i.id === item.id);
+    const nextQty = (existing ? existing.qty || 1 : 0) + 1;
+    const othersTotal = cartTotal(cart.filter((i) => i.id !== item.id));
+    const projected = othersTotal + item.points * nextQty;
+    if (projected > bal) {
+      const short = projected - bal;
       return {
         ok: false,
-        reason: subtotal > 0
-          ? `Adding the ${item.name} would take your cart to ${fmt(subtotal + item.points)} pts — ${fmt(short)} more than your ${fmt(bal)}-point balance. Remove something from the cart or pick a smaller reward.`
+        reason: existing
+          ? `You can't redeem ${nextQty} of the ${item.name} — that would need ${fmt(short)} more points than your ${fmt(bal)}-point balance. Remove something else from the cart to make room.`
           : `The ${item.name} costs ${fmt(item.points)} pts but you have ${fmt(bal)} — you're ${fmt(short)} points short.`,
       };
     }
-    const next = [...cart, item];
+    const next = existing
+      ? cart.map((i) => (i.id === item.id ? { ...i, qty: nextQty } : i))
+      : [...cart, { ...item, qty: 1 }];
     setCarts((c) => ({ ...c, [activeUserId]: next }));
-    return { ok: true, count: next.length };
+    return { ok: true, count: next.length, qty: nextQty };
+  }
+
+  /* +/- quantity stepper — used by the cart panel and the chat bubble's inline
+     cards. A decrement to 0 removes the line; an increment is budget-gated the
+     same way addToCart is, so a user is told immediately if they can't afford
+     a second (or third...) unit of the same reward. */
+  function changeQty(id, delta) {
+    const item = cart.find((i) => i.id === id);
+    if (!item) return { ok: false, reason: "That item isn't in your cart." };
+    const newQty = (item.qty || 1) + delta;
+    if (newQty <= 0) { removeFromCart(id); return { ok: true, removed: true }; }
+    if (delta > 0) {
+      const bal = balances[activeUserId];
+      const othersTotal = cartTotal(cart.filter((i) => i.id !== id));
+      const projected = othersTotal + item.points * newQty;
+      if (projected > bal) {
+        const short = projected - bal;
+        return { ok: false, reason: `You can't redeem ${newQty} of the ${item.name} — that's ${fmt(short)} more points than your ${fmt(bal)}-point balance allows.` };
+      }
+    }
+    setCarts((c) => ({ ...c, [activeUserId]: cart.map((i) => (i.id === id ? { ...i, qty: newQty } : i)) }));
+    return { ok: true, qty: newQty };
   }
 
   function removeFromCart(id) {
@@ -505,7 +587,7 @@ export function RewardsCatalogue({ theme, initialCategory = null, onExit }) {
      it. Never touches the bank ledger — a self-contained demo bucket. */
   function checkoutCart() {
     if (cart.length === 0) return { ok: false, reason: "Your cart is empty." };
-    const total = cart.reduce((a, i) => a + i.points, 0);
+    const total = cartTotal(cart);
     const bal = balances[activeUserId];
     if (total > bal) return { ok: false, reason: `You need ${fmt(total)} points but only have ${fmt(bal)}.` };
     const ref = newRef();
@@ -550,7 +632,7 @@ export function RewardsCatalogue({ theme, initialCategory = null, onExit }) {
 
       {/* cart panel */}
       {showCart && !checkingOut && (
-        <CartPanel theme={theme} cart={cart} balance={balance} onRemove={removeFromCart}
+        <CartPanel theme={theme} cart={cart} balance={balance} onRemove={removeFromCart} onChangeQty={changeQty}
           onBeginCheckout={() => { setShowCart(false); setCheckingOut(true); }}
           onClose={() => setShowCart(false)} />
       )}
@@ -564,14 +646,15 @@ export function RewardsCatalogue({ theme, initialCategory = null, onExit }) {
       {/* detail modal */}
       {modalItem && (
         <DetailModal item={modalItem} theme={theme} inCart={cart.some((i) => i.id === modalItem.id)}
-          balance={balance} cartTotal={cart.reduce((a, i) => a + i.points, 0)}
+          balance={balance} cartTotal={cartTotal(cart)}
           onClose={() => setModalItem(null)} onAddToCart={addToCart} onGoToCart={goToCartFromModal} />
       )}
 
       {/* floating concierge */}
       <CredArtBubble persona={persona} balance={balance} cartCount={cart.length}
-        cartTotal={cart.reduce((a, i) => a + i.points, 0)}
-        onAddToCart={addToCart} onViewItem={viewFromChat}
+        cartTotal={cartTotal(cart)}
+        onAddToCart={addToCart} onChangeQty={changeQty} cart={cart}
+        onViewItem={viewFromChat}
         onCheckout={() => { if (cart.length === 0) return; setModalItem(null); setShowCart(false); setCheckingOut(true); }}
         view="laptop" />
     </div>

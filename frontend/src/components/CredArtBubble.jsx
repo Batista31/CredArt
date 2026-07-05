@@ -14,9 +14,39 @@
 import React from "react";
 import { api } from "../lib/api.js";
 import { KobieAvatar } from "./Kobie.jsx";
-import { runConcierge, greetingFor, CHAT_CHIPS, fmtPts, onImgError, rewardImgStyle } from "../lib/catalogue.js";
+import { runConcierge, greetingFor, CHAT_CHIPS, CATEGORY_META, fmtPts, onImgError, rewardImgStyle } from "../lib/catalogue.js";
 
 const fmt = (n) => Number(n).toLocaleString("en-IN");
+const newSessionId = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(16).slice(2));
+
+/* ------------------------------------------------------------------ */
+/* Past-chats index — a small localStorage pointer list (per persona) into  */
+/* the REAL transcripts, which live server-side via /concierge/history      */
+/* (Redis-backed, see session.py). The index just remembers WHICH sessions  */
+/* exist and their titles/timestamps so the clock button has something to   */
+/* list instantly; the messages themselves are always fetched fresh from     */
+/* the server when a past chat is opened.                                    */
+/* ------------------------------------------------------------------ */
+const chatsKey = (personaId) => `credart:chats:${personaId}`;
+function loadChatIndex(personaId) {
+  try { return JSON.parse(localStorage.getItem(chatsKey(personaId)) || "[]"); } catch { return []; }
+}
+function saveChatIndex(personaId, list) {
+  try { localStorage.setItem(chatsKey(personaId), JSON.stringify(list.slice(0, 20))); } catch { /* ignore quota errors */ }
+}
+function titleFor(messages) {
+  const firstUser = messages.find((m) => m.who === "user");
+  const text = (firstUser && firstUser.text) || "New conversation";
+  return text.length > 44 ? text.slice(0, 44) + "…" : text;
+}
+function timeAgo(ts) {
+  const mins = Math.max(0, Math.round((Date.now() - ts) / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
 
 function Bubble({ who, children }) {
   const bot = who === "bot";
@@ -47,37 +77,53 @@ function Chip({ children, onClick, delay = 0 }) {
 /* Small inline catalogue card inside the chat: thumb + name + points + actions.
    Over-budget items are flagged BEFORE the user tries anything — the shortfall
    is shown and Add is disabled, so nobody hits a dead end at checkout. */
-function InlineItem({ item, budget, onAsk, onView }) {
+function InlineItem({ item, budget, cartQty = 0, onAsk, onChangeQty, onView }) {
   const affordable = item.points <= budget;
   const short = item.points - budget;
+  const inCart = cartQty > 0;
   return (
     <div style={{
       display: "flex", gap: 10, padding: 9, background: "#fff", borderRadius: 14,
       border: "1.5px solid var(--hairline)", boxShadow: "var(--sh-sm)",
-      opacity: affordable ? 1 : 0.92 }}>
+      opacity: affordable || inCart ? 1 : 0.92 }}>
       <img src={item.image} alt={item.name} loading="lazy"
         onError={onImgError(item)}
         style={{ width: 52, height: 52, borderRadius: 10, flexShrink: 0,
           background: "var(--brand-100)", border: "1px solid var(--hairline)",
-          filter: affordable ? "none" : "grayscale(0.5)", ...rewardImgStyle(item) }} />
+          filter: affordable || inCart ? "none" : "grayscale(0.5)", ...rewardImgStyle(item) }} />
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
         <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--ink)", lineHeight: 1.25 }}>{item.name}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
           <span className="num" style={{ fontSize: 12, fontWeight: 800, color: "var(--brand-600)" }}>{fmtPts(item.points)}</span>
-          {!affordable && (
+          {!affordable && !inCart && (
             <span style={{ fontSize: 10, fontWeight: 800, color: "var(--amber)", background: "var(--amber-bg)",
               padding: "2px 8px", borderRadius: 999 }}>⚠ {fmtPts(short)} short</span>
           )}
         </div>
-        <div style={{ display: "flex", gap: 6, marginTop: 1 }}>
-          <button className="tap" disabled={!affordable} onClick={() => affordable && onAsk(item)}
-            title={affordable ? "Add to cart" : `You need ${fmtPts(short)} more for this`}
-            style={{ fontSize: 11, fontWeight: 800, fontFamily: "var(--font)", padding: "5px 10px", borderRadius: 999,
-              border: "none", cursor: affordable ? "pointer" : "not-allowed",
-              color: affordable ? "#fff" : "var(--ink-3)",
-              background: affordable ? "linear-gradient(160deg,var(--brand-600),var(--brand-700))" : "rgba(8,28,51,0.06)" }}>
-            {affordable ? "+ Add to Cart" : "Over budget"}
-          </button>
+        <div style={{ display: "flex", gap: 6, marginTop: 1, alignItems: "center" }}>
+          {inCart ? (
+            /* Already in cart — a +/- quantity stepper instead of Add. Incrementing
+               is budget-gated by onChangeQty, same rule as the cart panel. */
+            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <button className="tap" onClick={() => onChangeQty(item, -1)} title="Decrease quantity"
+                style={{ width: 22, height: 22, borderRadius: 999, border: "1px solid var(--brand-200)", background: "#fff",
+                  color: "var(--brand-700)", cursor: "pointer", fontWeight: 800, fontSize: 13, lineHeight: 1 }}>−</button>
+              <span className="num" style={{ minWidth: 14, textAlign: "center", fontSize: 11.5, fontWeight: 800, color: "var(--ink)" }}>{cartQty}</span>
+              <button className="tap" onClick={() => onChangeQty(item, 1)} title="Increase quantity"
+                style={{ width: 22, height: 22, borderRadius: 999, border: "1px solid var(--brand-200)", background: "#fff",
+                  color: "var(--brand-700)", cursor: "pointer", fontWeight: 800, fontSize: 13, lineHeight: 1 }}>+</button>
+              <span style={{ fontSize: 10, fontWeight: 700, color: "var(--ink-3)" }}>in cart</span>
+            </div>
+          ) : (
+            <button className="tap" disabled={!affordable} onClick={() => affordable && onAsk(item)}
+              title={affordable ? "Add to cart" : `You need ${fmtPts(short)} more for this`}
+              style={{ fontSize: 11, fontWeight: 800, fontFamily: "var(--font)", padding: "5px 10px", borderRadius: 999,
+                border: "none", cursor: affordable ? "pointer" : "not-allowed",
+                color: affordable ? "#fff" : "var(--ink-3)",
+                background: affordable ? "linear-gradient(160deg,var(--brand-600),var(--brand-700))" : "rgba(8,28,51,0.06)" }}>
+              {affordable ? "+ Add to Cart" : "Over budget"}
+            </button>
+          )}
           <button className="tap" onClick={() => onView(item)}
             style={{ fontSize: 11, fontWeight: 700, fontFamily: "var(--font)", padding: "5px 10px", borderRadius: 999,
               border: "1px solid var(--brand-200)", background: "transparent", color: "var(--brand-700)", cursor: "pointer" }}>
@@ -89,17 +135,23 @@ function InlineItem({ item, budget, onAsk, onView }) {
   );
 }
 
-export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, onAddToCart, onViewItem, onCheckout, view = "laptop" }) {
+export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, cart = [],
+  onAddToCart, onChangeQty, onViewItem, onCheckout, view = "laptop" }) {
   const [open, setOpen] = React.useState(false);
+  const [expanded, setExpanded] = React.useState(false);
   const idc = React.useRef(0);
   const nid = () => ++idc.current;
   const [messages, setMessages] = React.useState([]);
   const [busy, setBusy] = React.useState(false);
   const [input, setInput] = React.useState("");
   const [flow, setFlow] = React.useState(null);
-  const [sessionId, setSessionId] = React.useState(null);
+  const [sessionId, setSessionId] = React.useState(newSessionId());
+  const [conversationId, setConversationId] = React.useState(null);
+  const [historyOpen, setHistoryOpen] = React.useState(false);
+  const [chatIndex, setChatIndex] = React.useState(() => loadChatIndex(persona.id));
   const scroller = React.useRef(null);
   const seeded = React.useRef(null);
+  const saveTimer = React.useRef(null);
 
   // Live values in a ref so async handlers always read the latest (avoids stale
   // closures when the balance/cart changes mid-conversation).
@@ -119,12 +171,36 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
     if (seeded.current === persona.id) return;
     seeded.current = persona.id;
     setMessages([{ id: nid(), who: "bot", intro: true, text: greetingFor(persona, balRef.current) }]);
-    setFlow(null); setSessionId(null);
+    setFlow(null); setSessionId(newSessionId()); setConversationId(null); setHistoryOpen(false);
+    setChatIndex(loadChatIndex(persona.id));
   }, [persona.id]);
 
   React.useEffect(() => {
     const el = scroller.current; if (el) el.scrollTop = el.scrollHeight;
   }, [messages, busy, open]);
+
+  /* Autosave: every turn (debounced) is persisted to Redis via /concierge/history
+     (falls back to in-memory server-side if Redis isn't configured — see
+     session.py). Skips the bare greeting so an untouched conversation never
+     clutters the history list. Silent on failure — nothing is lost locally,
+     it just won't show up in "past chats" until the backend is reachable. */
+  React.useEffect(() => {
+    if (messages.length <= 1) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      try {
+        await api.saveConciergeHistory(sessionId, persona.id,
+          messages.map(({ id, ...m }) => m), conversationId);
+        setChatIndex((list) => {
+          const next = [{ sessionId, conversationId, title: titleFor(messages), updatedAt: Date.now(), count: messages.length },
+            ...list.filter((c) => c.sessionId !== sessionId)];
+          saveChatIndex(persona.id, next);
+          return next;
+        });
+      } catch { /* offline — silently skip */ }
+    }, 900);
+    return () => clearTimeout(saveTimer.current);
+  }, [messages, conversationId, sessionId, persona.id]);
 
   const push = (m) => setMessages((x) => [...x, { id: nid(), ...m }]);
 
@@ -151,9 +227,13 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
     }
 
     // No local intent: best-effort backend enrichment, else mocked fallback.
+    // conversationId is threaded through so the backend's dialogue manager
+    // resumes the SAME conversation (and passes its full history to the LLM)
+    // instead of starting a fresh, context-less one on every enrichment call.
     try {
-      const r = await api.chat(text, sessionId, null, persona.id);
+      const r = await api.chat(text, sessionId, conversationId, persona.id);
       if (r && r.session_id) setSessionId(r.session_id);
+      if (r && r.conversation_id) setConversationId(r.conversation_id);
       const reply = (r && r.reply) || local.fallbackReply;
       push({ who: "bot", text: reply, items: [], chips: local.chips || [] });
     } catch {
@@ -176,9 +256,44 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
       chips: ["Redeem my cart", ...CHAT_CHIPS.slice(1)] });
   }
 
+  /* +/- from an inline chat card. Budget honesty applies here exactly like the
+     cart panel: an increase that would exceed the balance is rejected with a
+     clear reason instead of silently failing or overspending. */
+  function handleChangeQty(item, delta) {
+    const res = onChangeQty(item.id, delta);
+    if (!res || !res.ok) {
+      push({ who: "bot", text: res && res.reason ? res.reason : `I can't change the quantity for ${item.name} right now.` });
+    }
+  }
+
   function handleView(item) { onViewItem && onViewItem(item); setOpen(false); }
 
+  /* ---------- header actions: new chat / past chats / resize ---------- */
+  function startNewConversation() {
+    setMessages([{ id: nid(), who: "bot", intro: true, text: greetingFor(persona, balRef.current) }]);
+    setFlow(null); setSessionId(newSessionId()); setConversationId(null); setHistoryOpen(false);
+  }
+
+  async function openPastChat(entry) {
+    try {
+      const r = await api.conciergeHistory(entry.sessionId);
+      if (r && r.messages && r.messages.length) {
+        setMessages(r.messages.map((m) => ({ id: nid(), ...m })));
+        setSessionId(r.session_id || entry.sessionId);
+        setConversationId(r.conversation_id || entry.conversationId || null);
+        setFlow(null);
+      } else {
+        push({ who: "bot", text: "That conversation isn't on the server anymore — it may have expired." });
+      }
+    } catch {
+      push({ who: "bot", text: "Couldn't reach the server to load that conversation." });
+    }
+    setHistoryOpen(false);
+  }
+
   const mobile = view === "mobile";
+  const panelW = expanded ? "min(560px, calc(100% - 24px))" : (mobile ? "calc(100% - 24px)" : "min(400px, calc(100% - 44px))");
+  const panelH = expanded ? "min(760px, calc(100% - 60px))" : (mobile ? "calc(100% - 150px)" : "min(560px, calc(100% - 130px))");
 
   return (
     <>
@@ -207,10 +322,10 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
       {/* ---------- chat panel ---------- */}
       {open && (
         <div style={{ position: "absolute", right: mobile ? 12 : 22, bottom: mobile ? 88 : 94, zIndex: 61,
-          width: mobile ? "calc(100% - 24px)" : "min(400px, calc(100% - 44px))",
-          height: mobile ? "calc(100% - 150px)" : "min(560px, calc(100% - 130px))",
+          width: panelW, height: panelH,
           background: "#fff", borderRadius: 20, overflow: "hidden", display: "flex", flexDirection: "column",
           boxShadow: "0 26px 60px rgba(30,27,75,0.42), 0 0 0 1px rgba(0,0,0,0.05)",
+          transition: "width .22s ease, height .22s ease",
           animation: "sheetUp .28s cubic-bezier(.2,.8,.2,1)" }}>
 
           {/* header */}
@@ -231,11 +346,65 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
                 <span className="num">{cartCount}</span>
               </span>
             )}
+            <button className="tap" onClick={startNewConversation} title="New chat"
+              style={{ background: "rgba(255,255,255,0.16)", border: "none", width: 30, height: 30, borderRadius: 9,
+                display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, color: "#fff", fontSize: 17, fontWeight: 800, lineHeight: 1 }}>
+              +
+            </button>
+            <button className="tap" onClick={() => setHistoryOpen((h) => !h)} title="Past chats"
+              style={{ background: historyOpen ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.16)", border: "none", width: 30, height: 30, borderRadius: 9,
+                display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#fff" strokeWidth="1.8" /><path d="M12 7v5l3.5 2" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
+            <button className="tap" onClick={() => setExpanded((e) => !e)} title={expanded ? "Shrink" : "Enlarge"}
+              style={{ background: "rgba(255,255,255,0.16)", border: "none", width: 30, height: 30, borderRadius: 9,
+                display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
+              {expanded ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 3v4a2 2 0 0 1-2 2H3M15 3v4a2 2 0 0 0 2 2h4M9 21v-4a2 2 0 0 0-2-2H3M15 21v-4a2 2 0 0 1 2-2h4" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3 9V3h6M21 9V3h-6M3 15v6h6M21 15v6h-6" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              )}
+            </button>
             <button className="tap" onClick={() => setOpen(false)} title="Close"
               style={{ background: "rgba(255,255,255,0.16)", border: "none", width: 30, height: 30, borderRadius: 9,
                 display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
               <svg width="15" height="15" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" /></svg>
             </button>
+          </div>
+
+          {/* past-chats dropdown — real transcripts fetched fresh from the server */}
+          {historyOpen && (
+            <div className="no-sb" style={{ maxHeight: 200, overflowY: "auto", background: "#fff",
+              borderBottom: "1px solid var(--hairline)", flexShrink: 0 }}>
+              {chatIndex.length === 0 ? (
+                <div style={{ padding: "12px 14px", fontSize: 12, color: "var(--ink-3)" }}>No saved conversations yet — chats autosave as you go.</div>
+              ) : chatIndex.map((c) => (
+                <button key={c.sessionId} className="tap" onClick={() => openPastChat(c)}
+                  style={{ display: "flex", width: "100%", alignItems: "center", gap: 8, padding: "9px 14px",
+                    border: "none", borderBottom: "1px solid var(--hairline)", background: c.sessionId === sessionId ? "var(--brand-50)" : "#fff",
+                    cursor: "pointer", textAlign: "left" }}>
+                  <span style={{ fontSize: 14 }}>💬</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</div>
+                    <div style={{ fontSize: 10.5, color: "var(--ink-3)" }}>{timeAgo(c.updatedAt)} · {c.count} messages</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* category quick-switch */}
+          <div className="no-sb" style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 10px",
+            background: "var(--bg)", borderBottom: "1px solid var(--hairline)", flexShrink: 0, overflowX: "auto" }}>
+            {CATEGORY_META.map((meta) => (
+              <button key={meta.key} className="tap" onClick={() => sendText(`Show me ${meta.label} options`)}
+                title={`Browse ${meta.label}`}
+                style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700,
+                  fontFamily: "var(--font)", padding: "6px 10px", borderRadius: 999, border: "1px solid var(--brand-100)",
+                  background: "#fff", color: "var(--ink-2)", cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
+                {meta.emoji} {meta.label}
+              </button>
+            ))}
           </div>
 
           {/* messages */}
@@ -262,7 +431,8 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
                     <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingLeft: 34, width: "100%", maxWidth: "94%" }}>
                       {m.items.filter(Boolean).map((it) => (
                         <InlineItem key={it.id} item={it} budget={Math.max(0, balance - cartTotal)}
-                          onAsk={handleAddToCart} onView={handleView} />
+                          cartQty={(cart.find((c) => c.id === it.id) || {}).qty || 0}
+                          onAsk={handleAddToCart} onChangeQty={handleChangeQty} onView={handleView} />
                       ))}
                     </div>
                   )}

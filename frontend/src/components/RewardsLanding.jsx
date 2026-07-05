@@ -7,7 +7,9 @@
  * personalization. CTAs open the store (optionally deep-linked to a category).
  */
 import React from "react";
-import { CATEGORY_META, CATALOGUE } from "../lib/catalogue.js";
+import { CATEGORY_META, CATALOGUE, personaFor } from "../lib/catalogue.js";
+import { getActiveUser } from "../lib/api.js";
+import { CredArtBubble } from "./CredArtBubble.jsx";
 
 const fmt = (n) => Number(n).toLocaleString("en-IN");
 const img = (seed, w, h) => `https://picsum.photos/seed/${encodeURIComponent(seed)}/${w}/${h}`;
@@ -88,8 +90,9 @@ function Feature({ icon, title, children }) {
 
 export function RewardsLanding({ theme, onEnter, onSignOut }) {
   const totalRewards = CATEGORY_META.reduce((a, c) => a + CATALOGUE[c.key].length, 0);
+  const persona = personaFor(getActiveUser());
   return (
-    <div className="cr-root no-sb" style={{ minHeight: "100vh", background: "var(--bg)", overflowY: "auto" }}>
+    <div className="cr-root no-sb" style={{ minHeight: "100vh", position: "relative", background: "var(--bg)", overflowY: "auto" }}>
       {/* ---------- slim nav ---------- */}
       <div style={{ background: "#fff", borderBottom: "1px solid var(--brand-100)", padding: "12px 24px",
         display: "flex", alignItems: "center", gap: 12, position: "sticky", top: 0, zIndex: 10,
@@ -222,6 +225,15 @@ export function RewardsLanding({ theme, onEnter, onSignOut }) {
           CredArt Rewards · every number pre-verified, never invented · demo portal
         </div>
       </div>
+
+      {/* CredArt concierge is available from the moment the user lands — tapping
+          "add to cart" or "view" here jumps into the store (this page has no cart
+          of its own), same persona the store's switcher will show. */}
+      <CredArtBubble persona={persona} balance={persona.points} cartCount={0} cartTotal={0} cart={[]}
+        onAddToCart={(item) => { onEnter(item.category); return { ok: false, reason: `Opening the store so you can add the ${item.name} to your cart.` }; }}
+        onChangeQty={() => ({ ok: false, reason: "Open the store to manage cart quantities." })}
+        onViewItem={(item) => onEnter(item.category)}
+        onCheckout={() => onEnter(null)} />
     </div>
   );
 }

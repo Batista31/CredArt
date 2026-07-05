@@ -447,8 +447,7 @@ export const CAT_PERSONAS = {
        one-tap chip to act (activation strategy a). `expiringSoon` is demo data,
        same as `points`. */
     expiringSoon: 12000,
-    greeting:
-      "Hi Riya! ✈️ You have 84,500 points — and heads up, 12,000 of them expire at the end of this month, so now's a great time to use them. Going by your travel profile I'd lead with the IndiGo Flight Voucher at 32,000 points — perfect for a BLR-GOA getaway before they lapse. Want to book it, or explore other options?",
+    greeting: "Hi Riya! ✈️ You have 84,500 points, and 12,000 expire soon. How can I help?",
     /* CMR fallback — mirrors the seeded backend profile (migration 0012) so the
        checkout can personalize even when the backend is offline. When the
        backend IS up, the live GET /cmr/{user_id} response overrides this. */
@@ -463,8 +462,7 @@ export const CAT_PERSONAS = {
   [SAMYAK]: {
     id: SAMYAK, name: "Samyak Rao", short: "Samyak", points: 50000, lean: "dining", emoji: "🍽️",
     pickId: "gc-taj",
-    greeting:
-      "Hi Samyak! 🍽️ You have 50,000 points. Based on your dining preferences, the Taj Dining Voucher at 10,000 points would be a great pick — a premium dining experience for two. Interested, or shall I help you find something else?",
+    greeting: "Hi Samyak! 🍽️ You have 50,000 points. How can I help?",
     cmr: {
       addressLabel: "Home",
       address: "221, 100 Feet Road, Indiranagar",
@@ -565,6 +563,61 @@ function findProducts(t, budget, n = 3) {
     (it) => it.category === "merchandise" && words.some((w) => it.name.toLowerCase().includes(w)));
   if (!matches.length) return null;
   return { words, items: orderByBudget(matches, budget).slice(0, n) };
+}
+
+/* ------------------------------------------------------------------ */
+/* Full-catalogue intent search — every one of the 200+ rewards in          */
+/* ALL_ITEMS is reachable, not just the handful of curated ids referenced   */
+/* above by name. Each reward's "intent" is derived automatically from its  */
+/* category, its topical keyword (imageKeyword already classifies every     */
+/* item for photos), and its own name — so "noise cancelling headphones" or */
+/* "a Bali honeymoon" surfaces the ACTUAL matching reward even though no    */
+/* code path hardcoded that id. Keeping the matched word lets CredArt       */
+/* explain WHY a pick surfaced, deterministically — never guessed.          */
+/* ------------------------------------------------------------------ */
+const STOPWORDS = new Set([
+  "the", "a", "an", "for", "with", "of", "to", "and", "in", "on", "my", "your",
+  "me", "want", "need", "get", "some", "best", "good", "please", "can",
+  "points", "point", "pts", "reward", "rewards", "spend", "use", "buy",
+]);
+function tokenize(t) {
+  return (t || "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !STOPWORDS.has(w));
+}
+function itemTags(item) {
+  return [item.category, imageKeyword(item.name, item.category), ...tokenize(item.name)];
+}
+
+/* Scores every reward (optionally scoped to one category) against the
+   user's words. Returns [{ item, score, matched }], best first. */
+export function searchCatalogue(text, { category = null, limit = 4 } = {}) {
+  const tokens = tokenize(text);
+  if (!tokens.length) return [];
+  const pool = category ? ALL_ITEMS.filter((i) => i.category === category) : ALL_ITEMS;
+  const scored = [];
+  for (const item of pool) {
+    const tags = itemTags(item);
+    let score = 0, matched = null;
+    for (const tok of tokens) {
+      if (tags.includes(tok)) { score += 3; matched = matched || tok; }
+      else if (tags.some((tag) => tag.length > 2 && (tag.includes(tok) || tok.includes(tag)))) {
+        score += 1; matched = matched || tok;
+      }
+    }
+    if (score > 0) scored.push({ item, score, matched });
+  }
+  scored.sort((a, b) => b.score - a.score || a.item.points - b.item.points);
+  return scored.slice(0, limit);
+}
+
+/* Deterministic ONE-LINE "why this was recommended" explanation — never
+   LLM-generated, so it's always literally true: what matched, the rupee
+   value ratio if relevant, and where it stands against spendable budget. */
+export function whyPick(item, budget, matched) {
+  const bits = [];
+  if (matched) bits.push(`matches "${matched}"`);
+  if (item.value) bits.push(`${Math.round((item.value / item.points) * 100)}% value-per-point`);
+  bits.push(item.points <= budget ? "within your spendable points" : `${fmt(item.points - budget)} pts over budget`);
+  return bits.join(" · ");
 }
 
 /* Signals that clearly belong to a DIFFERENT intent than trip-planning — a
@@ -710,39 +763,51 @@ export function runConcierge(rawMessage, ctx) {
   /* ---------- category browses (budget-ordered + flagged; off-lean browses get
      a gentle redirect nudge that never blocks the browse — strategy (b)) ---------- */
   if (has(t, "travel", "flight", "trip", "getaway", "vacation", "holiday", "hotel", "stay", "lounge")) {
-    const items = orderByBudget([itemById("tv-indigo"), itemById("tv-marriott"), itemById("tv-itc")], budget);
+    const found = searchCatalogue(t, { category: "travel" });
+    const items = orderByBudget(found.length ? found.map((f) => f.item)
+      : [itemById("tv-indigo"), itemById("tv-marriott"), itemById("tv-itc"), itemById("tv-lounge")], budget);
     const nudge = laneNudge("travel");
+    const why = found.length ? ` I led with the ${items[0].name} because it ${whyPick(items[0], budget, found[0].matched)}.` : "";
     return {
-      reply: `Here are your top travel redemptions — I've led with the ones that fit your ${fmt(budget)} spendable points:${budgetNote(items, budget)}${nudge.text}`,
+      reply: `Here are your top travel redemptions — I've led with the ones that fit your ${fmt(budget)} spendable points:${budgetNote(items, budget)}${why}${nudge.text}`,
       items, chips: withNudge(["I'm planning a trip", "Best value for my points"], nudge), flow: null,
     };
   }
   if (has(t, "merchandise", "gadget", "product", "electronics", "appliance", "home") || productWordsIn(t).length) {
     const found = findProducts(t, budget);
     const items = found ? found.items
-      : orderByBudget([itemById("md-sony"), itemById("md-airpods"), itemById("md-airfryer")], budget);
+      : orderByBudget([itemById("md-sony"), itemById("md-airpods"), itemById("md-airfryer"), itemById("md-canon")], budget);
     const nudge = laneNudge("merchandise");
     const lead = found
       ? `Good pick — here ${found.items.length > 1 ? "are the closest matches" : "is the closest match"} for a ${found.words[0]} in the store, priced in points:`
       : `Popular merchandise picks — real products, priced in points:`;
+    const why = found
+      ? ` I led with the ${items[0].name} because it matches "${found.words[0]}" and is ${items[0].points <= budget ? "within your spendable points" : `${fmt(items[0].points - budget)} pts over budget`}.`
+      : "";
     return {
-      reply: `${lead}${budgetNote(items, budget)}${nudge.text}`,
+      reply: `${lead}${budgetNote(items, budget)}${why}${nudge.text}`,
       items, chips: withNudge(["Best value for my points", "Show me travel options"], nudge), flow: null,
     };
   }
   if (has(t, "gift card", "gift cards", "voucher", "amazon", "flipkart", "zomato", "swiggy", "myntra", "dining", "food")) {
-    const items = orderByBudget([itemById("gc-taj"), itemById("gc-amazon"), itemById("gc-zomato")], budget);
+    const found = searchCatalogue(t, { category: "giftcards" });
+    const items = orderByBudget(found.length ? found.map((f) => f.item)
+      : [itemById("gc-taj"), itemById("gc-amazon"), itemById("gc-zomato"), itemById("gc-swiggy")], budget);
     const nudge = laneNudge("giftcards");
+    const why = found.length ? ` I led with the ${items[0].name} because it ${whyPick(items[0], budget, found[0].matched)}.` : "";
     return {
-      reply: `Instant e-vouchers, straight to your inbox:${budgetNote(items, budget)}${nudge.text}`,
+      reply: `Instant e-vouchers, straight to your inbox:${budgetNote(items, budget)}${why}${nudge.text}`,
       items, chips: withNudge(["Best value for my points", "What's in merchandise?"], nudge), flow: null,
     };
   }
   if (has(t, "cashback", "cash back", "statement credit", "money back")) {
-    const items = orderByBudget([itemById("cb-10000"), itemById("cb-5000"), itemById("cb-2500")], budget);
+    const found = searchCatalogue(t, { category: "cashback" });
+    const items = orderByBudget(found.length ? found.map((f) => f.item)
+      : [itemById("cb-10000"), itemById("cb-5000"), itemById("cb-2500"), itemById("cb-1000")], budget);
     const nudge = laneNudge("cashback");
+    const why = found.length ? ` I led with the ${items[0].name} because it ${whyPick(items[0], budget, found[0].matched)}.` : "";
     return {
-      reply: `Prefer cash? These credit straight to your account — higher tiers give a little more per point:${budgetNote(items, budget)}${nudge.text}`,
+      reply: `Prefer cash? These credit straight to your account — higher tiers give a little more per point:${budgetNote(items, budget)}${why}${nudge.text}`,
       items, chips: withNudge(["Best value for my points", "Show me travel options"], nudge), flow: null,
     };
   }
@@ -768,7 +833,7 @@ export function runConcierge(rawMessage, ctx) {
     const lean = leanRecs(persona);
     const items = orderByBudget(lean.ids.map(itemById), budget);
     return {
-      reply: `Since your profile leans toward ${lean.word} ${lean.emoji}, I started there — these fit your ${fmt(budget)} spendable points:${budgetNote(items, budget)} Want a different lane? Just tap below.`,
+      reply: `Since your profile leans toward ${lean.word} ${lean.emoji}, I started there — these fit your ${fmt(budget)} spendable points:${budgetNote(items, budget)} I led with the ${items[0].name} because it's your top ${lean.word} pick and fits your budget. Want a different lane? Just tap below.`,
       items,
       chips: lean.switchChips,
       flow: null,
@@ -782,6 +847,26 @@ export function runConcierge(rawMessage, ctx) {
         ? `You have ${fmt(balance)} points, with ${fmt(cartTotal)} pts reserved in your cart — so ${fmt(budget)} pts spendable right now. Want me to find the smartest way to use them?`
         : `You currently have ${fmt(balance)} points to spend. Want me to find the smartest way to use them?`,
       items: [], chips: ["Best value for my points", "Show me travel options", "What's in merchandise?"], flow: null,
+    };
+  }
+
+  /* ---------- catch-all catalogue search: ANY reward, ANY category ----------
+     Covers free text that didn't hit one of the category blocks above (e.g.
+     "noise cancelling headphones", "a Bali honeymoon", "something for my
+     mom's birthday") by searching every one of the 200+ rewards in ALL_ITEMS
+     by name / category / topical-keyword, then explaining WHY the top pick
+     surfaced — derived from the actual match + the user's real spendable
+     budget, never invented. ---------- */
+  const globalFound = searchCatalogue(t);
+  if (globalFound.length) {
+    const items = orderByBudget(globalFound.map((f) => f.item), budget);
+    const top = items[0];
+    const matched = (globalFound.find((f) => f.item.id === top.id) || {}).matched;
+    return {
+      reply: `Here's what I found for "${rawMessage.trim()}":${budgetNote(items, budget)} I led with the ${top.name} because it ${whyPick(top, budget, matched)}.`,
+      items,
+      chips: ["Best value for my points", "Show me travel options", "What's in merchandise?"],
+      flow: null,
     };
   }
 
