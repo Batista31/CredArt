@@ -4,7 +4,7 @@
 import React from "react";
 import { THEMES, CategoryIcon } from "../theme.jsx";
 
-const ORDER = ["bank", "dining", "entertainment", "rewards"];
+const ORDER = ["bank", "rewards", "dining", "entertainment"];
 
 function Card({ theme, onPick, delay }) {
   const [hover, setHover] = React.useState(false);

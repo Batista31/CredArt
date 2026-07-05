@@ -36,20 +36,17 @@ export const api = {
   cards: (userId = ACTIVE_USER_ID) => jget(`/cards/${userId}`),
   cmr: (userId = ACTIVE_USER_ID) => jget(`/cmr/${userId}`),
 
-  chat: (message, sessionId, conversationId, userId = ACTIVE_USER_ID) =>
+  chat: (message, sessionId, conversationId, userId = ACTIVE_USER_ID, cardId) =>
     jpost("/chat", {
       user_id: userId,
       message,
       session_id: sessionId || undefined,
       conversation_id: conversationId || undefined,
+      card_id: cardId || undefined,
     }),
 
   conversations: (userId = ACTIVE_USER_ID) => jget(`/conversations?user_id=${userId}`),
   conversation: (id, userId = ACTIVE_USER_ID) => jget(`/conversations/${id}?user_id=${userId}`),
-
-  saveConciergeHistory: (sessionId, personaId, messages, conversationId) =>
-    jpost("/concierge/history", { session_id: sessionId, persona_id: personaId, messages, conversation_id: conversationId || undefined }),
-  conciergeHistory: (sessionId) => jget(`/concierge/history/${sessionId}`),
 
   redeem: ({ sessionId, candidateId, providerId, mode, consent, userId = ACTIVE_USER_ID }) =>
     jpost("/redeem", {

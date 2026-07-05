@@ -13,40 +13,11 @@
  */
 import React from "react";
 import { api } from "../lib/api.js";
+import { travelApi } from "../lib/travelApi.js";
 import { KobieAvatar } from "./Kobie.jsx";
-import { runConcierge, greetingFor, CHAT_CHIPS, CATEGORY_META, fmtPts, onImgError, rewardImgStyle } from "../lib/catalogue.js";
+import { runConcierge, greetingFor, CHAT_CHIPS, fmtPts, onImgError, rewardImgStyle } from "../lib/catalogue.js";
 
 const fmt = (n) => Number(n).toLocaleString("en-IN");
-const newSessionId = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(16).slice(2));
-
-/* ------------------------------------------------------------------ */
-/* Past-chats index — a small localStorage pointer list (per persona) into  */
-/* the REAL transcripts, which live server-side via /concierge/history      */
-/* (Redis-backed, see session.py). The index just remembers WHICH sessions  */
-/* exist and their titles/timestamps so the clock button has something to   */
-/* list instantly; the messages themselves are always fetched fresh from     */
-/* the server when a past chat is opened.                                    */
-/* ------------------------------------------------------------------ */
-const chatsKey = (personaId) => `credart:chats:${personaId}`;
-function loadChatIndex(personaId) {
-  try { return JSON.parse(localStorage.getItem(chatsKey(personaId)) || "[]"); } catch { return []; }
-}
-function saveChatIndex(personaId, list) {
-  try { localStorage.setItem(chatsKey(personaId), JSON.stringify(list.slice(0, 20))); } catch { /* ignore quota errors */ }
-}
-function titleFor(messages) {
-  const firstUser = messages.find((m) => m.who === "user");
-  const text = (firstUser && firstUser.text) || "New conversation";
-  return text.length > 44 ? text.slice(0, 44) + "…" : text;
-}
-function timeAgo(ts) {
-  const mins = Math.max(0, Math.round((Date.now() - ts) / 60000));
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
-}
 
 function Bubble({ who, children }) {
   const bot = who === "bot";
@@ -77,53 +48,37 @@ function Chip({ children, onClick, delay = 0 }) {
 /* Small inline catalogue card inside the chat: thumb + name + points + actions.
    Over-budget items are flagged BEFORE the user tries anything — the shortfall
    is shown and Add is disabled, so nobody hits a dead end at checkout. */
-function InlineItem({ item, budget, cartQty = 0, onAsk, onChangeQty, onView }) {
+function InlineItem({ item, budget, onAsk, onView }) {
   const affordable = item.points <= budget;
   const short = item.points - budget;
-  const inCart = cartQty > 0;
   return (
     <div style={{
       display: "flex", gap: 10, padding: 9, background: "#fff", borderRadius: 14,
       border: "1.5px solid var(--hairline)", boxShadow: "var(--sh-sm)",
-      opacity: affordable || inCart ? 1 : 0.92 }}>
+      opacity: affordable ? 1 : 0.92 }}>
       <img src={item.image} alt={item.name} loading="lazy"
         onError={onImgError(item)}
         style={{ width: 52, height: 52, borderRadius: 10, flexShrink: 0,
           background: "var(--brand-100)", border: "1px solid var(--hairline)",
-          filter: affordable || inCart ? "none" : "grayscale(0.5)", ...rewardImgStyle(item) }} />
+          filter: affordable ? "none" : "grayscale(0.5)", ...rewardImgStyle(item) }} />
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
         <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--ink)", lineHeight: 1.25 }}>{item.name}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
           <span className="num" style={{ fontSize: 12, fontWeight: 800, color: "var(--brand-600)" }}>{fmtPts(item.points)}</span>
-          {!affordable && !inCart && (
+          {!affordable && (
             <span style={{ fontSize: 10, fontWeight: 800, color: "var(--amber)", background: "var(--amber-bg)",
               padding: "2px 8px", borderRadius: 999 }}>⚠ {fmtPts(short)} short</span>
           )}
         </div>
-        <div style={{ display: "flex", gap: 6, marginTop: 1, alignItems: "center" }}>
-          {inCart ? (
-            /* Already in cart — a +/- quantity stepper instead of Add. Incrementing
-               is budget-gated by onChangeQty, same rule as the cart panel. */
-            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <button className="tap" onClick={() => onChangeQty(item, -1)} title="Decrease quantity"
-                style={{ width: 22, height: 22, borderRadius: 999, border: "1px solid var(--brand-200)", background: "#fff",
-                  color: "var(--brand-700)", cursor: "pointer", fontWeight: 800, fontSize: 13, lineHeight: 1 }}>−</button>
-              <span className="num" style={{ minWidth: 14, textAlign: "center", fontSize: 11.5, fontWeight: 800, color: "var(--ink)" }}>{cartQty}</span>
-              <button className="tap" onClick={() => onChangeQty(item, 1)} title="Increase quantity"
-                style={{ width: 22, height: 22, borderRadius: 999, border: "1px solid var(--brand-200)", background: "#fff",
-                  color: "var(--brand-700)", cursor: "pointer", fontWeight: 800, fontSize: 13, lineHeight: 1 }}>+</button>
-              <span style={{ fontSize: 10, fontWeight: 700, color: "var(--ink-3)" }}>in cart</span>
-            </div>
-          ) : (
-            <button className="tap" disabled={!affordable} onClick={() => affordable && onAsk(item)}
-              title={affordable ? "Add to cart" : `You need ${fmtPts(short)} more for this`}
-              style={{ fontSize: 11, fontWeight: 800, fontFamily: "var(--font)", padding: "5px 10px", borderRadius: 999,
-                border: "none", cursor: affordable ? "pointer" : "not-allowed",
-                color: affordable ? "#fff" : "var(--ink-3)",
-                background: affordable ? "linear-gradient(160deg,var(--brand-600),var(--brand-700))" : "rgba(8,28,51,0.06)" }}>
-              {affordable ? "+ Add to Cart" : "Over budget"}
-            </button>
-          )}
+        <div style={{ display: "flex", gap: 6, marginTop: 1 }}>
+          <button className="tap" disabled={!affordable} onClick={() => affordable && onAsk(item)}
+            title={affordable ? "Add to cart" : `You need ${fmtPts(short)} more for this`}
+            style={{ fontSize: 11, fontWeight: 800, fontFamily: "var(--font)", padding: "5px 10px", borderRadius: 999,
+              border: "none", cursor: affordable ? "pointer" : "not-allowed",
+              color: affordable ? "#fff" : "var(--ink-3)",
+              background: affordable ? "linear-gradient(160deg,var(--brand-600),var(--brand-700))" : "rgba(8,28,51,0.06)" }}>
+            {affordable ? "+ Add to Cart" : "Over budget"}
+          </button>
           <button className="tap" onClick={() => onView(item)}
             style={{ fontSize: 11, fontWeight: 700, fontFamily: "var(--font)", padding: "5px 10px", borderRadius: 999,
               border: "1px solid var(--brand-200)", background: "transparent", color: "var(--brand-700)", cursor: "pointer" }}>
@@ -135,23 +90,136 @@ function InlineItem({ item, budget, cartQty = 0, onAsk, onChangeQty, onView }) {
   );
 }
 
-export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, cart = [],
-  onAddToCart, onChangeQty, onViewItem, onCheckout, view = "laptop" }) {
+/* Inline LIVE-flight card in the chat: airline, route, times, points, badges +
+   a Book (demo) button that redeems through the real backend endpoint. Every
+   number shown comes straight off the Duffel-priced offer — the bubble never
+   invents one. */
+function InlineFlight({ offer, onBook, busy }) {
+  const clock = (iso) => { try { return new Date(iso).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }); } catch { return "—"; } };
+  const dur = Math.round(offer.duration_minutes);
+  const durLabel = `${Math.floor(dur / 60)}h ${dur % 60}m`;
+  return (
+    <div style={{ padding: 10, background: "#fff", borderRadius: 14, border: "1.5px solid var(--hairline)",
+      boxShadow: "var(--sh-sm)", opacity: offer.affordable ? 1 : 0.94 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--ink)" }}>{offer.airline}</div>
+          <div style={{ fontSize: 11.5, color: "var(--ink-2)", fontWeight: 600, marginTop: 2 }}>
+            {clock(offer.departing_at)} {offer.origin} → {clock(offer.arriving_at)} {offer.destination}
+          </div>
+          <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginTop: 1 }}>
+            {durLabel} · {offer.stops === 0 ? "Non-stop" : offer.stops + " stop"}
+            {offer.trip_type === "round_trip" ? " · round trip" : ""}
+          </div>
+          <div style={{ display: "flex", gap: 4, marginTop: 5, flexWrap: "wrap" }}>
+            {(offer.badges || []).map((b) => (
+              <span key={b} style={{ fontSize: 9.5, fontWeight: 800, padding: "2px 7px", borderRadius: 999,
+                background: "var(--brand-50)", color: "var(--brand-700)", border: "1px solid var(--brand-200)" }}>{b}</span>
+            ))}
+          </div>
+        </div>
+        <div style={{ textAlign: "right", flexShrink: 0 }}>
+          <div className="num" style={{ fontSize: 13.5, fontWeight: 800, color: "var(--brand-600)" }}>{fmtPts(offer.points_required)}</div>
+          <div style={{ fontSize: 9.5, color: "var(--ink-3)" }}>₹{Number(offer.cash_price_inr).toLocaleString("en-IN")} value</div>
+          {!offer.affordable && (
+            <div style={{ fontSize: 9.5, color: "var(--amber)", fontWeight: 800, marginTop: 2 }}>points + cash</div>
+          )}
+        </div>
+      </div>
+      <button className="tap" disabled={busy} onClick={() => onBook(offer)}
+        style={{ marginTop: 8, width: "100%", padding: "7px 0", borderRadius: 999, border: "none",
+          cursor: busy ? "wait" : "pointer", color: "#fff", fontFamily: "var(--font)", fontWeight: 800, fontSize: 11.5,
+          background: "linear-gradient(160deg,var(--brand-600),var(--brand-700))" }}>
+        {offer.affordable ? "Book with points (demo)" : "Book with points + cash (demo)"}
+      </button>
+    </div>
+  );
+}
+
+/* Per-persona conversation memory — a LIST of past conversations (newest
+   first), so the bubble has a real chat history + "new chat", like the bank
+   concierge. Survives closing the bubble / reloading the page. Stored
+   client-side only (this store's points are a self-contained demo bucket
+   already); never touches the bank chat's Redis-backed history. */
+const CONVOS_KEY = (personaId) => `credart_bubble_convos_${personaId}`;
+const HISTORY_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 3; // 3 days — stale resumes aren't useful
+const MAX_CONVOS = 8;
+
+const newCid = () => `c${Date.now()}${Math.floor(Math.random() * 1e4)}`;
+
+function loadConvos(personaId) {
+  try {
+    const raw = localStorage.getItem(CONVOS_KEY(personaId));
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list.filter((c) => c && c.cid && Array.isArray(c.messages)) : [];
+  } catch { return []; }
+}
+function saveConvo(personaId, convo) {
+  try {
+    const rest = loadConvos(personaId).filter((c) => c.cid !== convo.cid);
+    localStorage.setItem(CONVOS_KEY(personaId),
+      JSON.stringify([{ ...convo, savedAt: Date.now() }, ...rest].slice(0, MAX_CONVOS)));
+  } catch { /* storage unavailable — history just won't persist */ }
+}
+
+const relTime = (ts) => {
+  const mins = Math.max(1, Math.round((Date.now() - (ts || Date.now())) / 60000));
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs} hour${hrs > 1 ? "s" : ""} ago`;
+  const days = Math.round(hrs / 24);
+  return `${days} day${days > 1 ? "s" : ""} ago`;
+};
+
+const convoTitle = (c) => {
+  const firstUser = (c.messages || []).find((m) => m.who === "user" && m.text);
+  if (!firstUser) return "New conversation";
+  return firstUser.text.length > 44 ? firstUser.text.slice(0, 44) + "…" : firstUser.text;
+};
+
+/* One line of context for the resume prompt — "continue where you left off"
+   shouldn't be a memory test. Mid-flight bookings name the route; otherwise
+   the last thing the user asked is quoted. */
+function describeConvo(c) {
+  const when = relTime(c.savedAt);
+  // mid-booking → name the route (the most useful thing to be reminded of)
+  if (c.flow && c.flow.journey === "flight") {
+    const d = c.flow.data || {};
+    return `${when} you were booking a flight${d.dest ? ` to ${d.dest}` : ""}${d.origin ? ` from ${d.origin}` : ""}`;
+  }
+  // a finished flight search also deserves the route, not the last chip tap
+  const flightMsg = [...(c.messages || [])].reverse().find((m) => m.flights && m.flights.length);
+  if (flightMsg && flightMsg.flights[0]) {
+    const f = flightMsg.flights[0];
+    return `${when} you were comparing flights ${f.origin} → ${f.destination}`;
+  }
+  // otherwise the OPENING ask carries the intent — the last message is usually
+  // just a chip answer ("Just me", "Round trip") that means nothing alone
+  const firstUser = (c.messages || []).find((m) => m.who === "user" && m.text);
+  if (firstUser) {
+    const txt = firstUser.text.length > 48 ? firstUser.text.slice(0, 48) + "…" : firstUser.text;
+    return `${when} you asked about “${txt}”`;
+  }
+  return `we spoke ${when}`;
+}
+
+export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, onAddToCart, onViewItem, onCheckout, onSpend, onOpenTravel, view = "laptop" }) {
   const [open, setOpen] = React.useState(false);
-  const [expanded, setExpanded] = React.useState(false);
   const idc = React.useRef(0);
   const nid = () => ++idc.current;
   const [messages, setMessages] = React.useState([]);
   const [busy, setBusy] = React.useState(false);
   const [input, setInput] = React.useState("");
   const [flow, setFlow] = React.useState(null);
-  const [sessionId, setSessionId] = React.useState(newSessionId());
-  const [conversationId, setConversationId] = React.useState(null);
-  const [historyOpen, setHistoryOpen] = React.useState(false);
-  const [chatIndex, setChatIndex] = React.useState(() => loadChatIndex(persona.id));
+  const [sessionId, setSessionId] = React.useState(null);
+  // Holds the saved transcript while we wait for the user to pick "continue" vs
+  // "start fresh" — kept out of `messages` until they choose so nothing renders twice.
+  const [pendingResume, setPendingResume] = React.useState(null);
+  const [showHistory, setShowHistory] = React.useState(false);
+  const [convos, setConvos] = React.useState([]);
+  const cid = React.useRef(newCid());
   const scroller = React.useRef(null);
   const seeded = React.useRef(null);
-  const saveTimer = React.useRef(null);
 
   // Live values in a ref so async handlers always read the latest (avoids stale
   // closures when the balance/cart changes mid-conversation).
@@ -165,42 +233,67 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
   flowRef.current = flow;
 
   // (Re)seed the greeting whenever the persona changes — the whole point of the
-  // demo is that the same bubble greets Riya and Samyak differently. The
-  // greeting is patched with the LIVE balance so it never states a stale number.
+  // demo is that the same bubble greets Riya and Samyak differently. If a prior
+  // conversation for this persona was saved, ask before resuming — don't just
+  // silently drop them into old context, and don't silently discard it either.
   React.useEffect(() => {
     if (seeded.current === persona.id) return;
     seeded.current = persona.id;
-    setMessages([{ id: nid(), who: "bot", intro: true, text: greetingFor(persona, balRef.current) }]);
-    setFlow(null); setSessionId(newSessionId()); setConversationId(null); setHistoryOpen(false);
-    setChatIndex(loadChatIndex(persona.id));
+    setFlow(null); setSessionId(null); setPendingResume(null); setShowHistory(false);
+    cid.current = newCid();
+    const list = loadConvos(persona.id);
+    const latest = list[0];
+    const fresh = latest && latest.messages.length >= 2 &&
+      Date.now() - (latest.savedAt || 0) < HISTORY_MAX_AGE_MS;
+    if (fresh) {
+      setMessages([{ id: nid(), who: "bot", resumePrompt: true,
+        text: `Welcome back, ${persona.short} — ${describeConvo(latest)}. Continue where we left off, or start fresh?` }]);
+      setPendingResume(latest);
+    } else {
+      setMessages([{ id: nid(), who: "bot", intro: true, text: greetingFor(persona, balRef.current) }]);
+    }
   }, [persona.id]);
 
   React.useEffect(() => {
     const el = scroller.current; if (el) el.scrollTop = el.scrollHeight;
   }, [messages, busy, open]);
 
-  /* Autosave: every turn (debounced) is persisted to Redis via /concierge/history
-     (falls back to in-memory server-side if Redis isn't configured — see
-     session.py). Skips the bare greeting so an untouched conversation never
-     clutters the history list. Silent on failure — nothing is lost locally,
-     it just won't show up in "past chats" until the backend is reachable. */
+  // Persist the live transcript so it can be resumed / found in history later.
+  // Skipped while a resume choice is pending so the transient prompt message
+  // never overwrites the saved conversation it's asking about.
   React.useEffect(() => {
-    if (messages.length <= 1) return;
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      try {
-        await api.saveConciergeHistory(sessionId, persona.id,
-          messages.map(({ id, ...m }) => m), conversationId);
-        setChatIndex((list) => {
-          const next = [{ sessionId, conversationId, title: titleFor(messages), updatedAt: Date.now(), count: messages.length },
-            ...list.filter((c) => c.sessionId !== sessionId)];
-          saveChatIndex(persona.id, next);
-          return next;
-        });
-      } catch { /* offline — silently skip */ }
-    }, 900);
-    return () => clearTimeout(saveTimer.current);
-  }, [messages, conversationId, sessionId, persona.id]);
+    if (pendingResume) return;
+    if (messages.length < 2) return; // don't persist a bare greeting
+    saveConvo(persona.id, { cid: cid.current, messages, flow, sessionId });
+  }, [messages, flow, sessionId, pendingResume, persona.id]);
+
+  function resumeConversation() {
+    if (!pendingResume) return;
+    cid.current = pendingResume.cid || newCid();
+    setMessages(pendingResume.messages.map((m) => ({ ...m, id: nid() })));
+    setFlow(pendingResume.flow || null);
+    setSessionId(pendingResume.sessionId || null);
+    setPendingResume(null);
+  }
+  /* "Start fresh" AND the header's New-chat button: a new conversation id +
+     greeting. The previous conversation stays in history — nothing is lost. */
+  function newChat() {
+    cid.current = newCid();
+    setMessages([{ id: nid(), who: "bot", intro: true, text: greetingFor(persona, balRef.current) }]);
+    setFlow(null); setSessionId(null); setPendingResume(null); setShowHistory(false);
+  }
+  const startFresh = newChat;
+  function openHistory() {
+    setConvos(loadConvos(persona.id));
+    setShowHistory((s) => !s);
+  }
+  function loadConversation(c) {
+    cid.current = c.cid;
+    setMessages(c.messages.map((m) => ({ ...m, id: nid() })));
+    setFlow(c.flow || null);
+    setSessionId(c.sessionId || null);
+    setPendingResume(null); setShowHistory(false);
+  }
 
   const push = (m) => setMessages((x) => [...x, { id: nid(), ...m }]);
 
@@ -219,6 +312,30 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
       return;
     }
 
+    // Chat-driven flight booking: the slot-filling finished — hit the LIVE Duffel
+    // search endpoint and render real flight cards inline (chat is the primary
+    // booking surface; every points/₹ figure is computed server-side).
+    if (local.action === "flight_search") {
+      push({ who: "bot", text: local.reply });
+      try {
+        const r = await travelApi.searchFlights(local.flightParams);
+        const flights = (r.results || []).slice(0, 3);
+        if (!flights.length) {
+          push({ who: "bot", text: "Hmm — no live flights came back for that route and date. Want to try different cities or dates?",
+            chips: ["Book a flight", "Show me travel options"] });
+        } else {
+          push({ who: "bot",
+            text: `Here are live options for ${r.origin} → ${r.destination}, real fares priced into points against your ${fmt(r.available_points)} travel points on ${r.card_name}. Tap to book (demo redemption):`,
+            flights, chips: onOpenTravel ? ["Open full Travel page"] : [] });
+        }
+      } catch {
+        push({ who: "bot", text: "I couldn't reach the live flight search just now — want me to show catalogue travel rewards instead?",
+          chips: ["Show me travel options"] });
+      }
+      setBusy(false);
+      return;
+    }
+
     if (local.reply != null) {
       // Local engine handled it — coherent reply + real catalogue cards.
       push({ who: "bot", text: local.reply, items: local.items || [], chips: local.chips || [] });
@@ -227,13 +344,9 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
     }
 
     // No local intent: best-effort backend enrichment, else mocked fallback.
-    // conversationId is threaded through so the backend's dialogue manager
-    // resumes the SAME conversation (and passes its full history to the LLM)
-    // instead of starting a fresh, context-less one on every enrichment call.
     try {
-      const r = await api.chat(text, sessionId, conversationId, persona.id);
+      const r = await api.chat(text, sessionId, null, persona.id);
       if (r && r.session_id) setSessionId(r.session_id);
-      if (r && r.conversation_id) setConversationId(r.conversation_id);
       const reply = (r && r.reply) || local.fallbackReply;
       push({ who: "bot", text: reply, items: [], chips: local.chips || [] });
     } catch {
@@ -244,6 +357,38 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
   }
 
   function send() { const t = input.trim(); if (!t || busy) return; setInput(""); sendText(t); }
+
+  /* Chip taps normally re-enter the concierge as text; a couple are UI actions
+     (open the full Travel page) and are intercepted here instead. */
+  function handleChip(c) {
+    if (c === "Open full Travel page") { if (onOpenTravel) { setOpen(false); onOpenTravel(); } return; }
+    sendText(c);
+  }
+
+  /* Book a live flight straight from the chat via the real backend endpoint.
+     Points move server-side (Riya's replayable demo_points bucket); we mirror
+     the spend onto the store header so the visible balance stays consistent. */
+  async function handleBookFlight(offer) {
+    if (busy) return;
+    setBusy(true);
+    const mode = offer.affordable ? "points" : "points_plus_cash";
+    try {
+      const r = await travelApi.demoConfirm(offer.offer_id, mode);
+      if (r.status === "completed") {
+        if (onSpend) onSpend(r.points_used);
+        push({ who: "bot",
+          text: `✅ Booked! ${offer.airline} ${offer.origin}→${offer.destination}. Demo PNR ${r.booking_reference}. Redeemed ${fmtPts(r.points_used)}${r.cash_due_inr ? ` + ₹${fmt(r.cash_due_inr)}` : ""} — a simulated redemption, no real ticket issued.`,
+          chips: ["Book another flight", "Show me travel options"] });
+      } else {
+        push({ who: "bot", text: `That booking didn't go through: ${r.rollback_reason || "please try another option"}.`,
+          chips: ["Book a flight"] });
+      }
+    } catch {
+      push({ who: "bot", text: "The booking hit an error — please try again in a moment.", chips: ["Book a flight"] });
+    } finally {
+      setBusy(false);
+    }
+  }
 
   function handleAddToCart(item) {
     const res = onAddToCart(item); // parent adds to the per-persona cart
@@ -256,44 +401,9 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
       chips: ["Redeem my cart", ...CHAT_CHIPS.slice(1)] });
   }
 
-  /* +/- from an inline chat card. Budget honesty applies here exactly like the
-     cart panel: an increase that would exceed the balance is rejected with a
-     clear reason instead of silently failing or overspending. */
-  function handleChangeQty(item, delta) {
-    const res = onChangeQty(item.id, delta);
-    if (!res || !res.ok) {
-      push({ who: "bot", text: res && res.reason ? res.reason : `I can't change the quantity for ${item.name} right now.` });
-    }
-  }
-
   function handleView(item) { onViewItem && onViewItem(item); setOpen(false); }
 
-  /* ---------- header actions: new chat / past chats / resize ---------- */
-  function startNewConversation() {
-    setMessages([{ id: nid(), who: "bot", intro: true, text: greetingFor(persona, balRef.current) }]);
-    setFlow(null); setSessionId(newSessionId()); setConversationId(null); setHistoryOpen(false);
-  }
-
-  async function openPastChat(entry) {
-    try {
-      const r = await api.conciergeHistory(entry.sessionId);
-      if (r && r.messages && r.messages.length) {
-        setMessages(r.messages.map((m) => ({ id: nid(), ...m })));
-        setSessionId(r.session_id || entry.sessionId);
-        setConversationId(r.conversation_id || entry.conversationId || null);
-        setFlow(null);
-      } else {
-        push({ who: "bot", text: "That conversation isn't on the server anymore — it may have expired." });
-      }
-    } catch {
-      push({ who: "bot", text: "Couldn't reach the server to load that conversation." });
-    }
-    setHistoryOpen(false);
-  }
-
   const mobile = view === "mobile";
-  const panelW = expanded ? "min(560px, calc(100% - 24px))" : (mobile ? "calc(100% - 24px)" : "min(400px, calc(100% - 44px))");
-  const panelH = expanded ? "min(760px, calc(100% - 60px))" : (mobile ? "calc(100% - 150px)" : "min(560px, calc(100% - 130px))");
 
   return (
     <>
@@ -322,10 +432,10 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
       {/* ---------- chat panel ---------- */}
       {open && (
         <div style={{ position: "absolute", right: mobile ? 12 : 22, bottom: mobile ? 88 : 94, zIndex: 61,
-          width: panelW, height: panelH,
+          width: mobile ? "calc(100% - 24px)" : "min(400px, calc(100% - 44px))",
+          height: mobile ? "calc(100% - 150px)" : "min(560px, calc(100% - 130px))",
           background: "#fff", borderRadius: 20, overflow: "hidden", display: "flex", flexDirection: "column",
           boxShadow: "0 26px 60px rgba(30,27,75,0.42), 0 0 0 1px rgba(0,0,0,0.05)",
-          transition: "width .22s ease, height .22s ease",
           animation: "sheetUp .28s cubic-bezier(.2,.8,.2,1)" }}>
 
           {/* header */}
@@ -346,24 +456,15 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
                 <span className="num">{cartCount}</span>
               </span>
             )}
-            <button className="tap" onClick={startNewConversation} title="New chat"
-              style={{ background: "rgba(255,255,255,0.16)", border: "none", width: 30, height: 30, borderRadius: 9,
-                display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, color: "#fff", fontSize: 17, fontWeight: 800, lineHeight: 1 }}>
-              +
-            </button>
-            <button className="tap" onClick={() => setHistoryOpen((h) => !h)} title="Past chats"
-              style={{ background: historyOpen ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.16)", border: "none", width: 30, height: 30, borderRadius: 9,
+            <button className="tap" onClick={openHistory} title="Conversation history"
+              style={{ background: showHistory ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.16)", border: "none", width: 30, height: 30, borderRadius: 9,
                 display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#fff" strokeWidth="1.8" /><path d="M12 7v5l3.5 2" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="#fff" strokeWidth="1.8" /><path d="M12 7.5V12l3 2" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
-            <button className="tap" onClick={() => setExpanded((e) => !e)} title={expanded ? "Shrink" : "Enlarge"}
+            <button className="tap" onClick={newChat} title="New chat"
               style={{ background: "rgba(255,255,255,0.16)", border: "none", width: 30, height: 30, borderRadius: 9,
                 display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
-              {expanded ? (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 3v4a2 2 0 0 1-2 2H3M15 3v4a2 2 0 0 0 2 2h4M9 21v-4a2 2 0 0 0-2-2H3M15 21v-4a2 2 0 0 1 2-2h4" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-              ) : (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3 9V3h6M21 9V3h-6M3 15v6h6M21 15v6h-6" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-              )}
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" /></svg>
             </button>
             <button className="tap" onClick={() => setOpen(false)} title="Close"
               style={{ background: "rgba(255,255,255,0.16)", border: "none", width: 30, height: 30, borderRadius: 9,
@@ -372,40 +473,33 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
             </button>
           </div>
 
-          {/* past-chats dropdown — real transcripts fetched fresh from the server */}
-          {historyOpen && (
-            <div className="no-sb" style={{ maxHeight: 200, overflowY: "auto", background: "#fff",
-              borderBottom: "1px solid var(--hairline)", flexShrink: 0 }}>
-              {chatIndex.length === 0 ? (
-                <div style={{ padding: "12px 14px", fontSize: 12, color: "var(--ink-3)" }}>No saved conversations yet — chats autosave as you go.</div>
-              ) : chatIndex.map((c) => (
-                <button key={c.sessionId} className="tap" onClick={() => openPastChat(c)}
-                  style={{ display: "flex", width: "100%", alignItems: "center", gap: 8, padding: "9px 14px",
-                    border: "none", borderBottom: "1px solid var(--hairline)", background: c.sessionId === sessionId ? "var(--brand-50)" : "#fff",
-                    cursor: "pointer", textAlign: "left" }}>
-                  <span style={{ fontSize: 14 }}>💬</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</div>
-                    <div style={{ fontSize: 10.5, color: "var(--ink-3)" }}>{timeAgo(c.updatedAt)} · {c.count} messages</div>
+          {/* conversation history drawer — overlays the transcript, same panel */}
+          {showHistory && (
+            <div className="no-sb" style={{ position: "absolute", top: 62, left: 0, right: 0, bottom: 0, zIndex: 8,
+              background: "var(--bg)", overflowY: "auto", padding: "14px 12px", animation: "sheetUp .2s ease" }}>
+              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.5, color: "var(--ink-3)", textTransform: "uppercase", margin: "2px 4px 10px" }}>
+                Your conversations
+              </div>
+              {convos.length === 0 ? (
+                <div style={{ padding: "26px 10px", textAlign: "center", color: "var(--ink-3)", fontSize: 13 }}>
+                  No saved conversations yet — say something and it'll be here next time.
+                </div>
+              ) : convos.map((c) => (
+                <button key={c.cid} className="tap" onClick={() => loadConversation(c)} style={{ display: "block", width: "100%",
+                  textAlign: "left", background: c.cid === cid.current ? "var(--brand-100)" : "#fff",
+                  border: "1px solid var(--hairline)", borderRadius: 13, padding: "11px 13px", marginBottom: 8,
+                  cursor: "pointer", fontFamily: "var(--font)", boxShadow: "var(--sh-sm)" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {convoTitle(c)}
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                    {relTime(c.savedAt)} · {(c.messages || []).filter((m) => m.who === "user").length} message{(c.messages || []).filter((m) => m.who === "user").length === 1 ? "" : "s"}
+                    {c.flow && c.flow.journey === "flight" ? " · flight booking in progress" : ""}
                   </div>
                 </button>
               ))}
             </div>
           )}
-
-          {/* category quick-switch */}
-          <div className="no-sb" style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 10px",
-            background: "var(--bg)", borderBottom: "1px solid var(--hairline)", flexShrink: 0, overflowX: "auto" }}>
-            {CATEGORY_META.map((meta) => (
-              <button key={meta.key} className="tap" onClick={() => sendText(`Show me ${meta.label} options`)}
-                title={`Browse ${meta.label}`}
-                style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700,
-                  fontFamily: "var(--font)", padding: "6px 10px", borderRadius: 999, border: "1px solid var(--brand-100)",
-                  background: "#fff", color: "var(--ink-2)", cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
-                {meta.emoji} {meta.label}
-              </button>
-            ))}
-          </div>
 
           {/* messages */}
           <div ref={scroller} className="no-sb" style={{ flex: 1, overflowY: "auto", padding: "14px 12px", background: "var(--bg)" }}>
@@ -422,7 +516,15 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
                   {/* greeting quick chips */}
                   {m.intro && (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 7, paddingLeft: 34 }}>
-                      {CHAT_CHIPS.map((c, i) => <Chip key={c} delay={i * 60} onClick={() => sendText(c)}>{c}</Chip>)}
+                      {CHAT_CHIPS.map((c, i) => <Chip key={c} delay={i * 60} onClick={() => handleChip(c)}>{c}</Chip>)}
+                    </div>
+                  )}
+
+                  {/* resume-vs-fresh choice — shown once, before any saved history renders */}
+                  {m.resumePrompt && pendingResume && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 7, paddingLeft: 34 }}>
+                      <Chip onClick={resumeConversation}>Continue where I left off</Chip>
+                      <Chip delay={60} onClick={startFresh}>Start fresh</Chip>
                     </div>
                   )}
 
@@ -431,8 +533,16 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
                     <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingLeft: 34, width: "100%", maxWidth: "94%" }}>
                       {m.items.filter(Boolean).map((it) => (
                         <InlineItem key={it.id} item={it} budget={Math.max(0, balance - cartTotal)}
-                          cartQty={(cart.find((c) => c.id === it.id) || {}).qty || 0}
-                          onAsk={handleAddToCart} onChangeQty={handleChangeQty} onView={handleView} />
+                          onAsk={handleAddToCart} onView={handleView} />
+                      ))}
+                    </div>
+                  )}
+
+                  {/* inline LIVE flight cards (real Duffel offers, book in-chat) */}
+                  {m.flights && m.flights.length > 0 && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingLeft: 34, width: "100%", maxWidth: "94%" }}>
+                      {m.flights.map((o) => (
+                        <InlineFlight key={o.offer_id} offer={o} onBook={handleBookFlight} busy={busy} />
                       ))}
                     </div>
                   )}
@@ -440,7 +550,7 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
                   {/* follow-up chips (last message only) */}
                   {m.chips && m.chips.length > 0 && mi === messages.length - 1 && !busy && (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 7, paddingLeft: 34 }}>
-                      {m.chips.map((c, i) => <Chip key={c} delay={i * 55} onClick={() => sendText(c)}>{c}</Chip>)}
+                      {m.chips.map((c, i) => <Chip key={c} delay={i * 55} onClick={() => handleChip(c)}>{c}</Chip>)}
                     </div>
                   )}
                 </div>

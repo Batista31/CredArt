@@ -142,7 +142,7 @@ function FloatingKobie({ onClick, greeting }) {
   );
 }
 
-export function Dashboard({ user, cards, mode, onOpenChat, onOpenSettings, onOpenTnc }) {
+export function Dashboard({ user, cards, mode, onOpenChat, onOpenSettings, onOpenTnc, onOpenHistory }) {
   const totalPoints = cards.reduce((a, c) => a + (c.current_points || 0), 0);
   const expiringSoon = cards
     .filter((c) => c.days_to_expiry != null && c.days_to_expiry <= 60 && c.next_expiry_points)
@@ -162,9 +162,15 @@ export function Dashboard({ user, cards, mode, onOpenChat, onOpenSettings, onOpe
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 2l2.4 6.3L21 9.2l-5 4.3L17.5 21 12 17.3 6.5 21 8 13.5 3 9.2l6.6-.9z" fill="#C4A4F4" /></svg>
               <span style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.3 }}>CredArt</span>
             </div>
-            <div className="tap" onClick={onOpenSettings} style={{ width: 38, height: 38, borderRadius: 12,
-              background: "rgba(255,255,255,0.14)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="#fff" strokeWidth="1.7" /><path d="M19.4 13a1.6 1.6 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.6 1.6 0 00-2.7 1.1V21a2 2 0 01-4 0v-.2A1.6 1.6 0 005 19.4a2 2 0 11-2.8-2.8l.1-.1A1.6 1.6 0 003.4 14H3a2 2 0 010-4h.2A1.6 1.6 0 004.6 7.2a2 2 0 112.8-2.8l.1.1A1.6 1.6 0 0010 4.6V4a2 2 0 014 0v.2a1.6 1.6 0 002.7 1.1l.1-.1a2 2 0 112.8 2.8l-.1.1a1.6 1.6 0 00-.3 1.8" stroke="#fff" strokeWidth="1.5" /></svg>
+            <div style={{ display: "flex", gap: 8 }}>
+              <div className="tap" onClick={onOpenHistory} title="Chat history" style={{ width: 38, height: 38, borderRadius: 12,
+                background: "rgba(255,255,255,0.14)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M3 12a9 9 0 109-9" stroke="#fff" strokeWidth="1.7" strokeLinecap="round"/><path d="M3 12V6m0 6h6" stroke="#fff" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/><path d="M12 7v5l3.5 2" stroke="#fff" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </div>
+              <div className="tap" onClick={onOpenSettings} style={{ width: 38, height: 38, borderRadius: 12,
+                background: "rgba(255,255,255,0.14)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="#fff" strokeWidth="1.7" /><path d="M19.4 13a1.6 1.6 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.6 1.6 0 00-2.7 1.1V21a2 2 0 01-4 0v-.2A1.6 1.6 0 005 19.4a2 2 0 11-2.8-2.8l.1-.1A1.6 1.6 0 003.4 14H3a2 2 0 010-4h.2A1.6 1.6 0 004.6 7.2a2 2 0 112.8-2.8l.1.1A1.6 1.6 0 0010 4.6V4a2 2 0 014 0v.2a1.6 1.6 0 002.7 1.1l.1-.1a2 2 0 112.8 2.8l-.1.1a1.6 1.6 0 00-.3 1.8" stroke="#fff" strokeWidth="1.5" /></svg>
+              </div>
             </div>
           </div>
 

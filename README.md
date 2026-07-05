@@ -15,7 +15,7 @@ A landing page lets you pick a world; each opens its own themed concierge chat.
 A global **laptop ⇄ mobile** toggle renders the whole app inside a phone frame.
 
 > Architecture, the anti-hallucination boundary, CMR, dialogue engine, fulfilment
-> partners, and demo personas are documented in [`CLAUDE.md`](./CLAUDE.md).
+> partners, and demo personas are documented in [`DEMO_RUNBOOK.md`](./DEMO_RUNBOOK.md).
 
 ## Layout
 

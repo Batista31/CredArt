@@ -8,6 +8,7 @@ import { CR_FULFILL, crPathLabel, ProtectedBadge, TrustFooter } from "./mode.jsx
 
 const fmt = (n) => (n == null ? "0" : Number(n).toLocaleString());
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const fmtTime = (iso) => { try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { return ""; } };
 
 /* ---------- real OTP entry ---------- */
 function OtpScreen({ ctx, onSubmit, onCancel, error, busy }) {
@@ -126,7 +127,12 @@ function FailedScreen({ reason, onBack }) {
 /* ---------- main execution flow (real API) ---------- */
 export function Confirm({ booking, mode, onDone, onBackToChat }) {
   const { candidate, option, sessionId } = booking;
-  const prod = mode === "production";
+  // The button the user actually tapped decides demo-vs-production, not the global
+  // toggle: tapping "Demo (demo credits)" must always book demo, even while the app
+  // is in Production mode (that's the whole point of the demo option — safe rehearsal
+  // without leaving production mode). The backend rejects mode="production" paired
+  // with a demo-path provider, which is exactly what sending the raw global mode caused.
+  const prod = mode === "production" && option.path !== "demo";
   const pathKey = option.path || "demo";
   const f = CR_FULFILL[pathKey] || CR_FULFILL.demo;
 
@@ -315,6 +321,41 @@ export function Confirm({ booking, mode, onDone, onBackToChat }) {
             {crPathLabel(result?.path || pathKey)}
           </div>
         </div>
+
+        {/* ticket — real Duffel booking receipt, when the provider returned one */}
+        {result?.ticket && (
+          <div style={{ marginTop: 20, background: "rgba(255,255,255,0.13)", borderRadius: "var(--r-lg)", border: "1px solid rgba(255,255,255,0.16)", padding: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: 12, marginBottom: 12, borderBottom: "1px solid rgba(255,255,255,0.14)" }}>
+              <span style={{ fontSize: 11, opacity: 0.7, fontWeight: 700, letterSpacing: 0.4 }}>YOUR TICKET</span>
+              {result.ticket.pnr && (
+                <span className="num" style={{ fontSize: 13.5, fontWeight: 800, letterSpacing: 0.5 }}>PNR {result.ticket.pnr}</span>
+              )}
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 800 }}>{result.ticket.airline}</div>
+                <div style={{ fontSize: 12.5, opacity: 0.75, marginTop: 2 }}>
+                  {result.ticket.origin}→{result.ticket.destination}
+                  {result.ticket.cabin ? ` · ${result.ticket.cabin}` : ""}
+                </div>
+              </div>
+              {result.ticket.departing_at && (
+                <div style={{ textAlign: "right" }}>
+                  <div className="num" style={{ fontSize: 15, fontWeight: 800 }}>{fmtTime(result.ticket.departing_at)}</div>
+                  <div style={{ fontSize: 11, opacity: 0.65 }}>{result.ticket.depart_date}</div>
+                </div>
+              )}
+            </div>
+            {result.ticket.passengers && result.ticket.passengers.length > 0 && (
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+                <div style={{ fontSize: 11, opacity: 0.65, fontWeight: 600, marginBottom: 4 }}>PASSENGERS</div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>
+                  {result.ticket.passengers.map((p) => p.name).join(", ")}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* recap */}
         <div style={{ marginTop: 20, background: "rgba(255,255,255,0.13)", borderRadius: "var(--r-lg)", border: "1px solid rgba(255,255,255,0.16)", padding: 16 }}>

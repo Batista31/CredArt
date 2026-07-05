@@ -46,5 +46,4 @@ yarn-error.log*
 # Misc
 .turbo/
 coverage/
-.claude/
 graphify-out/

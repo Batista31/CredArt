@@ -173,7 +173,7 @@ async def _llm_call(system: str, user: str, *, json_mode: bool = False) -> tuple
             print(f"[llm] all Groq keys failed ({e}), falling back to Gemini")
     if GEMINI_API_KEY:
         return await _gemini_chat(system, user), False
-    raise RuntimeError("No LLM API key available (GROQ_API_KEY or GEMINI_API_KEY required)")
+    raise RuntimeError("No LLM API key available (GROQ_API_KEY[2/3] or GEMINI_API_KEY required)")
 
 
 async def llm_extract_intent(

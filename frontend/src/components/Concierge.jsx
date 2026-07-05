@@ -40,6 +40,7 @@ function OptionCard({ cand, mode, onRedeem, wishlisted, dismissed, onWishlist, o
   const opts = cand.fulfillment_options || [];
   const pts = cand.points_cost;
   const thumb = cand.metadata && cand.metadata.thumbnail;
+  const icon = cand.metadata && cand.metadata.icon;
   return (
     <div style={{
       display: "flex", flexDirection: "column", gap: 11, padding: 13, background: "#fff",
@@ -51,9 +52,11 @@ function OptionCard({ cand, mode, onRedeem, wishlisted, dismissed, onWishlist, o
             style={{ width: 68, height: 68, borderRadius: 12, objectFit: "cover", flexShrink: 0,
               background: "var(--surface)", border: "1px solid var(--hairline)" }} />
         ) : (
-          <div style={{ width: 42, height: 42, borderRadius: 12, background: "var(--brand-600)",
-            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#fff", fontWeight: 800, fontSize: 16 }}>
-            {(cand.label || "?").slice(0, 1)}
+          <div style={{ width: 42, height: 42, borderRadius: 12,
+            background: icon ? "var(--brand-100)" : "var(--brand-600)",
+            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+            color: "#fff", fontWeight: 800, fontSize: icon ? 22 : 16 }}>
+            {icon || (cand.label || "?").slice(0, 1)}
           </div>
         )}
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -127,7 +130,7 @@ function OptionCard({ cand, mode, onRedeem, wishlisted, dismissed, onWishlist, o
   );
 }
 
-export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, dismissedLabels, onWishlist, onDismiss }) {
+export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, dismissedLabels, onWishlist, onDismiss, resumeConversationId, merchFloor }) {
   const cardName = card?.card_name || "Concierge";
   const isMillennia = card?.card_id === "hdfc_millennia";
   const headerPts = card ? card.current_points : (user?.cards || []).reduce?.((a, c) => a + (c.current_points || 0), 0);
@@ -143,7 +146,7 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
   const [busy, setBusy] = React.useState(false);
   const [input, setInput] = React.useState("");
   const [sessionId, setSessionId] = React.useState(null);
-  const [conversationId, setConversationId] = React.useState(null);
+  const [conversationId, setConversationId] = React.useState(resumeConversationId || null);
   const [err, setErr] = React.useState(null);
   const [convos, setConvos] = React.useState([]);
   const [showHistory, setShowHistory] = React.useState(false);
@@ -151,8 +154,14 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
   const started = React.useRef(false);
 
   function introMessage() {
-    return { id: nid(), who: "bot", intro: true,
-      text: `Hi ${(user?.name || "there").split(" ")[0]} — I'm CredArt, your ${cardName} concierge. What would you like to do with your points?` };
+    let text = `Hi ${(user?.name || "there").split(" ")[0]} — CredArt here. Let's make your points count ✨`;
+    // Low-balance heads-up, up front — both numbers are real (card balance from
+    // /cards, floor = cheapest catalogue item), never invented.
+    const pts = card?.current_points;
+    if (card && merchFloor && pts != null && pts < merchFloor) {
+      text += ` Heads up: this card has ${pts.toLocaleString()} pts and catalogue rewards start at ${merchFloor.toLocaleString()} pts — I'll focus on what fits your balance, and a voucher can bridge the gap if you spot something bigger.`;
+    }
+    return { id: nid(), who: "bot", intro: true, text };
   }
   function showIntro() {
     setConversationId(null); setSessionId(null); setMessages([introMessage()]);
@@ -178,6 +187,18 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
   React.useEffect(() => {
     if (started.current) return;
     started.current = true;
+    if (resumeConversationId && user?.user_id) {
+      api.conversation(resumeConversationId, user.user_id).then((d) => {
+        const past = (d.messages || []).map((m) => ({
+          id: nid(), who: m.role === "assistant" ? "bot" : "user", text: m.content, candidates: [],
+        }));
+        setMessages(past.length ? past : [{ id: nid(), who: "bot", text: "Picking up where you left off — what next?", intro: true }]);
+        setConversationId(resumeConversationId);
+      }).catch(() => {
+        setMessages([{ id: nid(), who: "bot", text: "Couldn't load that conversation — starting fresh.", intro: true }]);
+      });
+      return;
+    }
     (async () => {
       try {
         const { conversations } = await api.conversations();
@@ -199,7 +220,7 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
     pushMsg({ who: "user", text });
     setBusy(true); setErr(null);
     try {
-      const r = await api.chat(text, sessionId, conversationId);
+      const r = await api.chat(text, sessionId, conversationId, undefined, card?.card_id);
       if (r.session_id) setSessionId(r.session_id);
       if (r.conversation_id) setConversationId(r.conversation_id);
       const showCandidates = r.response_type !== "follow_up_question";
@@ -229,7 +250,7 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
           <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: -0.2 }}>CredArt</div>
           <div style={{ fontSize: 11.5, opacity: 0.78, display: "flex", alignItems: "center", gap: 5 }}>
             <span style={{ width: 6, height: 6, borderRadius: 99, background: "#5BE6A4" }} />
-            HDFC {cardName} · concierge
+            HDFC{card ? ` ${cardName}` : ""} · concierge
           </div>
         </div>
         <button className="tap" onClick={openHistory} title="Conversation history" style={{ background: "rgba(255,255,255,0.14)", border: "none", width: 36, height: 36,

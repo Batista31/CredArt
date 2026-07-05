@@ -16,7 +16,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
 from services import (
     bank_mcp_client,
@@ -37,6 +36,7 @@ from .conversation import resume_conversation
 from .dialogue_manager import generate_concierge_response
 from .dining import router as dining_router
 from .entertainment import router as entertainment_router
+from .travel import router as travel_router
 from .intent import extract_intent
 from .orchestrator import orchestrate
 from .schemas import (
@@ -87,6 +87,11 @@ app.include_router(dining_router)
 # — self-contained router at /entertainment. Additive only; shares no bank state.
 app.include_router(entertainment_router)
 
+# Travel Rewards concierge (flight search/results/review/demo booking) — self-
+# contained router at /travel. Additive only; reuses flight_service/duffel_provider
+# but shares no state with the bank chat routes.
+app.include_router(travel_router)
+
 
 @app.get("/health")
 async def health():
@@ -106,7 +111,7 @@ async def chat(req: ChatRequest):
         raise HTTPException(status_code=404, detail="unknown user_id")
 
     concierge = await generate_concierge_response(
-        req.user_id, req.message, conversation_id=req.conversation_id)
+        req.user_id, req.message, conversation_id=req.conversation_id, active_card_id=req.card_id)
 
     session = await store.load(req.session_id)
     await store.append_turn(session, "user", req.message)
@@ -114,7 +119,7 @@ async def chat(req: ChatRequest):
     intent = concierge["intent"]
     candidates = concierge["candidates"]
     trace = concierge["tool_trace"]
-    meta = {"reply": concierge["message"], "llm_used": concierge["claude_used"]}
+    meta = {"reply": concierge["message"], "llm_used": concierge["llm_used"]}
 
     if candidates:
         await scoring_service.log_recommendation_events(
@@ -127,7 +132,7 @@ async def chat(req: ChatRequest):
         candidates=candidates,
         reply=meta["reply"],
         tool_trace=trace,
-        claude_used=meta.get("llm_used", False),
+        llm_used=meta.get("llm_used", False),
         conversation_id=concierge["conversation_id"],
         message=concierge["message"],
         response_type=concierge["response_type"],
@@ -150,40 +155,6 @@ async def chat(req: ChatRequest):
     session["candidate_index"] = idx
     await store.save(session)
     return resp
-
-
-class ConciergeHistoryRequest(BaseModel):
-    session_id: str
-    persona_id: str
-    messages: list[dict]
-    conversation_id: str | None = None
-
-
-@app.post("/concierge/history")
-async def save_concierge_history(req: ConciergeHistoryRequest):
-    """Store the Rewards Catalogue bubble's local transcript in the same
-    Redis-backed session store as the bank /chat flow (falls back to
-    in-memory automatically — see session.py). Called automatically (autosave)
-    after every turn, and read back when the user reopens a past conversation
-    from the history list — including conversation_id, so the LLM resumes with
-    full context instead of starting fresh."""
-    session = await store.load(req.session_id)
-    session["concierge_persona_id"] = req.persona_id
-    session["concierge_messages"] = req.messages
-    session["concierge_conversation_id"] = req.conversation_id
-    await store.save(session)
-    return {"status": "saved", "session_id": session["session_id"], "count": len(req.messages)}
-
-
-@app.get("/concierge/history/{session_id}")
-async def get_concierge_history(session_id: str):
-    session = await store.load(session_id)
-    return {
-        "session_id": session["session_id"],
-        "persona_id": session.get("concierge_persona_id"),
-        "conversation_id": session.get("concierge_conversation_id"),
-        "messages": session.get("concierge_messages", []),
-    }
 
 
 @app.post("/redeem", response_model=RedeemResponse)
@@ -271,7 +242,11 @@ async def cards(user_id: str):
     user = await user_service.get_user(user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="unknown user_id")
-    return {"user": user, "cards": await user_service.get_user_cards(user_id)}
+    from services.merchandise_catalog import MIN_POINTS
+    # merch_floor_points: cheapest catalogue item — lets the UI warn a
+    # low-balance user up front (Layer-1 number, never invented).
+    return {"user": user, "cards": await user_service.get_user_cards(user_id),
+            "merch_floor_points": MIN_POINTS}
 
 
 # ---------------------------------------------------------------------------

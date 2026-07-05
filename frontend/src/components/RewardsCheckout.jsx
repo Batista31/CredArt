@@ -192,8 +192,8 @@ function AddressStep({ persona, cmr, cmrLive, merchandise, onConfirm, onCancel }
             <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 9, background: "#fff", borderRadius: 10,
               border: "1px solid var(--brand-100)", padding: "8px 10px" }}>
               <img src={it.image} alt="" onError={onImgError(it)} style={{ width: 32, height: 32, borderRadius: 7, background: "var(--brand-50)", ...rewardImgStyle(it) }} />
-              <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ink)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}{(it.qty || 1) > 1 ? ` × ${it.qty}` : ""}</span>
-              <span className="num" style={{ fontSize: 11.5, color: "var(--ink-3)", flexShrink: 0 }}>{fmt(it.points * (it.qty || 1))} pts</span>
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ink)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
+              <span className="num" style={{ fontSize: 11.5, color: "var(--ink-3)", flexShrink: 0 }}>{fmt(it.points)} pts</span>
             </div>
           ))}
         </div>
@@ -220,7 +220,7 @@ export function RewardsCheckout({ persona, cart: cartProp, performCheckout, onDo
   /* Snapshot the cart on mount: performCheckout() clears the parent's cart at
      the "deduct" step, and the success screen must keep showing what was bought. */
   const [cart] = React.useState(cartProp);
-  const total = cart.reduce((a, i) => a + i.points * (i.qty || 1), 0);
+  const total = cart.reduce((a, i) => a + i.points, 0);
   const merchandise = cart.filter((i) => i.category === "merchandise");
   const needsDelivery = merchandise.length > 0;
 
@@ -236,7 +236,7 @@ export function RewardsCheckout({ persona, cart: cartProp, performCheckout, onDo
         setCmr((c) => ({
           ...c,
           addressLabel: addr.label || c.addressLabel,
-          address: [addr.address_line1, addr.address_line2].filter(Boolean).join(", "),
+          address: [addr.line1, addr.line2].filter(Boolean).join(", "),
           city: addr.city || c.city, state: addr.state || c.state, pincode: addr.pincode || c.pincode,
           familySize: (d.preferences && d.preferences.family_size) || c.familySize,
         }));
@@ -429,7 +429,7 @@ export function RewardsCheckout({ persona, cart: cartProp, performCheckout, onDo
                     borderBottom: i < result.refs.length - 1 ? "1px solid rgba(255,255,255,0.1)" : "none" }}>
                     <span style={{ color: "#5BE6A4", flexShrink: 0 }}>✓</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}{(item.qty || 1) > 1 ? ` × ${item.qty}` : ""}</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
                       <div style={{ fontSize: 11, opacity: 0.72 }}>
                         {ref.kind} <b className="num" style={{ letterSpacing: 0.5 }}>{ref.code}</b>
                         {item.category === "merchandise" && ` · ships to ${cmr.addressLabel}, ${cmr.city}`}

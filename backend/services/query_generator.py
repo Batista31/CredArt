@@ -41,31 +41,45 @@ Return ONLY valid JSON, no markdown:
   "confirmation": "<a one-line recap of what you've gathered, shown when ready becomes true, or null>"
 }
 
-How to gather context well — thorough, but never annoying:
-- Collect the genuinely decision-relevant details for the journey before recommending, ONE
-  question at a time, warm and concrete like a good assistant:
-  * product_purchase / merchandise_purchase: what the item is, any key spec/preference, and
-    a rough budget.
-  * gift_purchase: who it's for, the occasion, and a rough budget.
-  * voucher_redemption: which brand or use, and a rough value.
-- Ask for what you don't yet know. Do NOT assume or invent details the user hasn't given.
-- Do NOT recommend from a bare item/goal alone. Ask at least ONE useful question first —
-  e.g. a rough budget, or a key preference/brand/spec — before setting ready=true. (If the
-  user already gave a budget or clear preference, that counts; don't re-ask it.)
-- BUT there is NO confirmation step. NEVER ask the user to confirm, re-state, or "just
-  double-check" something they already told you. If a detail is in known_slots or the
-  conversation, it is FINAL — use it and move to the next missing detail. Never ask the same
-  thing twice, and never re-ask a slot that already has a value.
-- Accept vague answers AS answers ("around 5k", "something nice", "you pick") and move on.
-  Today's date is provided, so interpret any relative dates yourself rather than re-asking.
+Rules:
+- Ask ONE question at a time. Be warm and concrete, like a good travel agent.
+- Gather ONLY the genuinely decision-relevant context for the journey before recommending:
+  * travel_flight / travel_hotel: destination, travel dates, and a total passenger/guest
+    COUNT. That's it — do NOT ask for adult/child composition, cabin class, hotel style,
+    or any other detail: this system prices every seat the same regardless of age, so
+    composition is not decision-relevant. Once you have a number, you're done.
+  * product_purchase / merchandise_purchase: what item. A rough budget/priority feel is
+    ONLY worth asking if the item category is genuinely broad (e.g. "a gift" or "something
+    for the kitchen") — for a specific, cheap, or ordinary item (a water bottle, a phone
+    case, headphones under a few thousand rupees) go ready=true immediately once the item
+    is known. Do not ask about material, size, brand, or "any other preference" — just search.
+  * gift_purchase: who it's for and the occasion — nothing more.
+  * voucher_redemption: which brand/use — nothing more.
+- Use known_slots: NEVER re-ask something already answered, and NEVER ask a narrower
+  version of a question you already asked (e.g. asking "any specific material?" after
+  already asking about features counts as a repeat — don't do it).
+- HARD CAP: at most ONE clarifying question for product-identity journeys (product_purchase,
+  merchandise_purchase, voucher_redemption, gift_purchase). For travel_flight/travel_hotel/
+  home_setup, at most TWO questions total, ever, for this conversation. Once you hit the
+  cap, set ready=true even if some optional detail is still unknown — a good recommendation
+  with a small gap beats interrogating the user.
+- Do a brief CONFIRMATION before going ready only for travel (dates/party) — skip it for
+  simple product/voucher/gift journeys, just go straight to ready=true.
+- NEVER ask for information the system already owns: card IDs, card/account numbers, point
+  balances, user IDs. Only ask about the user's own intent and preferences.
 - profile_defaults holds saved-profile hints — apply them silently and mention in the recap;
   do NOT turn them into questions.
-- NEVER ask for information the system already owns: card IDs, card/account numbers, point
-  balances, user IDs.
-- Once you have the essentials, set ready=true, question=null, and put a short recap in
-  confirmation, e.g. "Great — a mixer-grinder around ₹5,000, here's the best way to use your
-  points:". Don't keep asking beyond what's needed.
+- When ready=true, set question=null and fill confirmation with a short recap like
+  "From what you've told me (2 adults + 1 child, Fri–Sun in Manali), here's the best way
+  to use your points:". For simple product/voucher lookups, confirmation can be null.
 """
+
+
+# Hard caps enforced in code (not just prompted) — the LLM doesn't reliably
+# self-limit, which is how a water bottle ended up with 3 rounds of questions.
+_SIMPLE_JOURNEYS = {"product_purchase", "merchandise_purchase", "voucher_redemption", "gift_purchase"}
+_QUESTION_CAP = {"travel_flight": 2, "travel_hotel": 2, "home_setup": 2}
+_DEFAULT_CAP = 1  # simple/product-identity journeys
 
 
 async def next_context_question(
@@ -73,6 +87,7 @@ async def next_context_question(
     known_slots: dict,
     history: list[dict],
     user_goal: str,
+    questions_asked: int = 0,
     profile_defaults: dict | None = None,
 ) -> dict:
     """Return {"ready": bool, "slot": str|None, "question": str|None, "confirmation": str|None}.
@@ -82,8 +97,12 @@ async def next_context_question(
     known_slots so the slot stays "unanswered" and the turn is never silently skipped.
 
     Never raises — on any failure returns ready=True so the flow proceeds to recommendations
-    rather than blocking the user.
+    rather than blocking the user. `questions_asked` is a hard, code-enforced cap: once hit,
+    ready=True regardless of what the LLM wants to ask next.
     """
+    cap = _QUESTION_CAP.get(journey_type, _DEFAULT_CAP)
+    if questions_asked >= cap:
+        return {"ready": True, "slot": None, "question": None, "confirmation": None}
     _today = _dt.date.today()
     payload = json.dumps({
         "today": _today.isoformat(),
@@ -93,6 +112,8 @@ async def next_context_question(
         "known_slots": known_slots,
         "profile_defaults": profile_defaults or {},
         "history": (history or [])[-6:],
+        "questions_already_asked": questions_asked,
+        "questions_remaining": cap - questions_asked,
     }, default=str)
     try:
         raw, _ = await _llm_call(_SYSTEM, payload, json_mode=True)

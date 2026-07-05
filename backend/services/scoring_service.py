@@ -4,7 +4,7 @@ Each candidate is scored 0–100 on five dimensions, combined with fixed weights
 into a total. Everything is computed from real data (catalogue transfer values,
 the user's preference weights, expiry timing, redemption history) — no invented
 numbers. The score is an internal ranking signal, never shown to the user as a
-₹ value. Claude (Phase 7) reranks/explains these candidates; it never recomputes
+₹ value. The LLM (Phase 7) reranks/explains these candidates; it never recomputes
 the score and never sees the DB.
 
 Dimensions and default weights:

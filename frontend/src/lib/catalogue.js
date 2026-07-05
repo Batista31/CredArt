@@ -442,12 +442,17 @@ export const CAT_PERSONAS = {
   [RIYA]: {
     id: RIYA, name: "Riya Sharma", short: "Riya", points: 84500, lean: "travel", emoji: "✈️",
     pickId: "tv-indigo",
+    /* Cards this persona owns — card-mapped rewards only show when the user
+       owns a qualifying card (mirrors the bank side, where Riya holds all
+       three HDFC cards). */
+    ownedCards: ["hdfc_millennia", "hdfc_regalia_gold", "hdfc_infinia"],
     /* Travel-leaning persona WITH points nearing expiry — the proactive greeting
        leads with a flight voucher AND flags the expiry urgency, then offers a
        one-tap chip to act (activation strategy a). `expiringSoon` is demo data,
        same as `points`. */
     expiringSoon: 12000,
-    greeting: "Hi Riya! ✈️ You have 84,500 points, and 12,000 expire soon. How can I help?",
+    greeting:
+      "Hi Riya! ✈️ You have 84,500 points — and heads up, 12,000 of them expire at the end of this month, so now's a great time to use them. Going by your travel profile I'd lead with the IndiGo Flight Voucher at 32,000 points — perfect for a BLR-GOA getaway before they lapse. Want to book it, or explore other options?",
     /* CMR fallback — mirrors the seeded backend profile (migration 0012) so the
        checkout can personalize even when the backend is offline. When the
        backend IS up, the live GET /cmr/{user_id} response overrides this. */
@@ -462,7 +467,11 @@ export const CAT_PERSONAS = {
   [SAMYAK]: {
     id: SAMYAK, name: "Samyak Rao", short: "Samyak", points: 50000, lean: "dining", emoji: "🍽️",
     pickId: "gc-taj",
-    greeting: "Hi Samyak! 🍽️ You have 50,000 points. How can I help?",
+    /* Samyak holds only the entry-tier Millennia — premium-card rewards are
+       hidden from his catalogue, chat recommendations, and search. */
+    ownedCards: ["hdfc_millennia"],
+    greeting:
+      "Hi Samyak! 🍽️ You have 50,000 points. Based on your dining preferences, the Taj Dining Voucher at 10,000 points would be a great pick — a premium dining experience for two. Interested, or shall I help you find something else?",
     cmr: {
       addressLabel: "Home",
       address: "221, 100 Feet Road, Indiranagar",
@@ -474,6 +483,34 @@ export const CAT_PERSONAS = {
 };
 
 export const personaFor = (id) => CAT_PERSONAS[id] || CAT_PERSONAS[RIYA];
+
+/* ------------------------------------------------------------------ */
+/* Card-mapped rewards — a reward tied to a card tier only shows for    */
+/* users who OWN a qualifying card. Deterministic rule (no per-item      */
+/* table to drift out of sync): 40k+ point rewards are premium-card      */
+/* exclusives (Regalia Gold / Infinia). Riya owns all three cards and    */
+/* sees the full catalogue; Samyak owns only Millennia, so premium       */
+/* rewards are hidden from his store grid, chat recs, and search.        */
+/* ------------------------------------------------------------------ */
+export const CARD_LABELS = {
+  hdfc_millennia: "Millennia",
+  hdfc_regalia_gold: "Regalia Gold",
+  hdfc_infinia: "Infinia",
+};
+const PREMIUM_CARDS = ["hdfc_regalia_gold", "hdfc_infinia"];
+const PREMIUM_THRESHOLD = 40000;
+
+export const requiredCards = (item) =>
+  item && item.points >= PREMIUM_THRESHOLD ? PREMIUM_CARDS : null;
+
+export const visibleTo = (item, persona) => {
+  const req = requiredCards(item);
+  if (!req) return true;
+  const owned = (persona && persona.ownedCards) || [];
+  return req.some((c) => owned.includes(c));
+};
+
+export const visibleItems = (persona, items) => (items || ALL_ITEMS).filter((i) => visibleTo(i, persona));
 
 /* Greeting with the LIVE balance patched in — after a redemption the seeded
    "You have 84,500 points" would be stale, and the old concierge never lied
@@ -565,61 +602,6 @@ function findProducts(t, budget, n = 3) {
   return { words, items: orderByBudget(matches, budget).slice(0, n) };
 }
 
-/* ------------------------------------------------------------------ */
-/* Full-catalogue intent search — every one of the 200+ rewards in          */
-/* ALL_ITEMS is reachable, not just the handful of curated ids referenced   */
-/* above by name. Each reward's "intent" is derived automatically from its  */
-/* category, its topical keyword (imageKeyword already classifies every     */
-/* item for photos), and its own name — so "noise cancelling headphones" or */
-/* "a Bali honeymoon" surfaces the ACTUAL matching reward even though no    */
-/* code path hardcoded that id. Keeping the matched word lets CredArt       */
-/* explain WHY a pick surfaced, deterministically — never guessed.          */
-/* ------------------------------------------------------------------ */
-const STOPWORDS = new Set([
-  "the", "a", "an", "for", "with", "of", "to", "and", "in", "on", "my", "your",
-  "me", "want", "need", "get", "some", "best", "good", "please", "can",
-  "points", "point", "pts", "reward", "rewards", "spend", "use", "buy",
-]);
-function tokenize(t) {
-  return (t || "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !STOPWORDS.has(w));
-}
-function itemTags(item) {
-  return [item.category, imageKeyword(item.name, item.category), ...tokenize(item.name)];
-}
-
-/* Scores every reward (optionally scoped to one category) against the
-   user's words. Returns [{ item, score, matched }], best first. */
-export function searchCatalogue(text, { category = null, limit = 4 } = {}) {
-  const tokens = tokenize(text);
-  if (!tokens.length) return [];
-  const pool = category ? ALL_ITEMS.filter((i) => i.category === category) : ALL_ITEMS;
-  const scored = [];
-  for (const item of pool) {
-    const tags = itemTags(item);
-    let score = 0, matched = null;
-    for (const tok of tokens) {
-      if (tags.includes(tok)) { score += 3; matched = matched || tok; }
-      else if (tags.some((tag) => tag.length > 2 && (tag.includes(tok) || tok.includes(tag)))) {
-        score += 1; matched = matched || tok;
-      }
-    }
-    if (score > 0) scored.push({ item, score, matched });
-  }
-  scored.sort((a, b) => b.score - a.score || a.item.points - b.item.points);
-  return scored.slice(0, limit);
-}
-
-/* Deterministic ONE-LINE "why this was recommended" explanation — never
-   LLM-generated, so it's always literally true: what matched, the rupee
-   value ratio if relevant, and where it stands against spendable budget. */
-export function whyPick(item, budget, matched) {
-  const bits = [];
-  if (matched) bits.push(`matches "${matched}"`);
-  if (item.value) bits.push(`${Math.round((item.value / item.points) * 100)}% value-per-point`);
-  bits.push(item.points <= budget ? "within your spendable points" : `${fmt(item.points - budget)} pts over budget`);
-  return bits.join(" · ");
-}
-
 /* Signals that clearly belong to a DIFFERENT intent than trip-planning — a
    product, a gift card, cashback, etc. A bare destination correction ("actually
    Dubai") deliberately does NOT match, so it stays in the trip flow. */
@@ -629,9 +611,142 @@ function switchesAwayFromTrip(t) {
             "statement credit", "merchandise", "electronics", "gadget", "appliance");
 }
 
+/* ---- FLIGHT booking flow helpers (real Duffel via the backend) ------------
+   The bubble gathers context one question at a time (destination → origin →
+   trip type → dates → travellers) then hands these params to the backend
+   /travel/flights/search (live Duffel). Dates are resolved to ISO HERE — no
+   LLM — mirroring dialogue_manager.py's _resolve_date so we never book in the
+   past. City NAMES are passed straight through; the backend resolves them to
+   IATA (same CITY_TO_IATA map the chat flight flow uses). */
+const _iso = (d) => d.toISOString().slice(0, 10);
+
+export function resolveDateISO(text) {
+  const t = (text || "").toLowerCase().trim();
+  const m = t.match(/\d{4}-\d{2}-\d{2}/);
+  if (m) return m[0];
+  const now = new Date();
+  const add = (n) => { const d = new Date(now); d.setDate(d.getDate() + n); return _iso(d); };
+  // next occurrence of a weekday (0=Sun … 6=Sat), always in the future
+  const nextDOW = (target) => { const d = new Date(now); const diff = ((target - d.getDay() + 7) % 7) || 7; d.setDate(d.getDate() + diff); return d; };
+  if (t.includes("today")) return _iso(now);
+  if (t.includes("tomorrow")) return add(1);
+  if (t.includes("next weekend")) { const sat = nextDOW(6); sat.setDate(sat.getDate() + 7); return _iso(sat); }
+  if (t.includes("weekend")) return _iso(nextDOW(6));
+  if (t.includes("next month")) return add(30);
+  if (t.includes("fortnight") || t.includes("2 week") || t.includes("two week")) return add(14);
+  if (t.includes("next week")) return add(7);
+  if (t.includes("holiday") || t.includes("holidays")) return add(45);
+  return add(21); // sensible default a few weeks out
+}
+
+function resolveReturnISO(departIso, text) {
+  const t = (text || "").toLowerCase();
+  const base = new Date(departIso);
+  const add = (n) => { const d = new Date(base); d.setDate(d.getDate() + n); return _iso(d); };
+  const m = t.match(/(\d+)\s*day/); if (m) return add(parseInt(m[1], 10));
+  if (t.includes("2 week") || t.includes("two week")) return add(14);
+  if (t.includes("week")) return add(7);
+  if (t.includes("weekend")) return add(2);
+  return add(3);
+}
+
+/* Cities the backend can resolve (mirrors CITY_TO_IATA in api/intent.py) —
+   used to detect an inline destination like "fly to Goa" so we can skip a
+   question, and to catch unbookable places BEFORE the live search 400s. */
+const _FLIGHT_CITIES = ["goa", "delhi", "new delhi", "mumbai", "bengaluru", "bangalore",
+  "dubai", "hyderabad", "chennai", "kolkata", "pune", "ahmedabad", "kochi", "jaipur",
+  "singapore", "london", "abu dhabi", "bangkok", "paris", "maldives",
+  "new york", "tokyo", "sydney", "hong kong", "frankfurt", "amsterdam",
+  "istanbul", "doha", "colombo", "kathmandu"];
+function _extractFlightCity(t) {
+  for (const c of _FLIGHT_CITIES) {
+    if (new RegExp(`\\b${c}\\b`).test(t)) return c.replace(/\b\w/g, (ch) => ch.toUpperCase());
+  }
+  return null;
+}
+
+/* Country/region names people type as destinations ("bangalore to USA") →
+   the bookable airport cities to offer instead of failing the live search. */
+const _COUNTRY_HINTS = [
+  ["usa", ["New York"]], ["united states", ["New York"]], ["america", ["New York"]], ["us", ["New York"]],
+  ["uk", ["London"]], ["england", ["London"]], ["britain", ["London"]],
+  ["uae", ["Dubai", "Abu Dhabi"]], ["japan", ["Tokyo"]], ["australia", ["Sydney"]],
+  ["thailand", ["Bangkok"]], ["france", ["Paris"]], ["germany", ["Frankfurt"]],
+  ["turkey", ["Istanbul"]], ["qatar", ["Doha"]], ["nepal", ["Kathmandu"]],
+  ["sri lanka", ["Colombo"]], ["europe", ["London", "Paris", "Frankfurt"]],
+];
+function _countryHint(t) {
+  for (const [c, chips] of _COUNTRY_HINTS) {
+    if (new RegExp(`\\b${c}\\b`).test(t)) {
+      // short names are acronyms (USA, UK, UAE) — uppercase whole, not "Usa"
+      const country = c.length <= 3 ? c.toUpperCase() : c.replace(/\b\w/g, (ch) => ch.toUpperCase());
+      return { country, chips };
+    }
+  }
+  return null;
+}
+
+/* Parse a whole route from ONE message ("bangalore to USA", "BOM → Dubai") —
+   both slots can arrive together, so neither should be re-asked. Returns
+   { origin, dest, destHint }: origin/dest are recognised cities (or null);
+   destHint is a country the user named, with bookable-city suggestions. */
+function _parseRoute(t) {
+  const m = t.match(/(.+?)\s+(?:to|→|->)\s+(.+)/);
+  const left = m ? m[1] : null;
+  let right = m ? m[2] : t;
+  let origin = left ? _extractFlightCity(left) : null;
+  // "fly to dubai FROM mumbai" — pull the origin out of the tail so it isn't
+  // mistaken for the destination
+  const fm = right.match(/(.*)\bfrom\b(.*)/);
+  if (fm) {
+    origin = origin || _extractFlightCity(fm[2]);
+    right = fm[1];
+  }
+  return {
+    origin,
+    dest: _extractFlightCity(right),
+    destHint: _countryHint(right),
+  };
+}
+
+function _paxChips(persona) {
+  const fam = (persona.cmr && persona.cmr.familySize) || 1;
+  return [["Just me", 1], ["2", 2], ["3", 3], ["4", 4]].map(([label, n]) =>
+    (fam === n ? `${label} (usual)` : label));
+}
+function _parsePax(t, persona) {
+  if (/just me|solo|only me|myself|alone/.test(t)) return 1;
+  const m = t.match(/(\d+)/); if (m) return Math.max(1, Math.min(9, parseInt(m[1], 10)));
+  return (persona.cmr && persona.cmr.familySize) || 1;
+}
+
+/* Terminal step of the flight flow: package the collected slots into a search
+   the bubble runs against the live Duffel endpoint. */
+function _flightSearchStep(d) {
+  const tripType = d.tripType || "round_trip";
+  const params = {
+    trip_type: tripType,
+    origin: d.origin,
+    destination: d.dest,
+    depart_date: d.departIso,
+    return_date: tripType === "one_way" ? null : d.returnIso,
+    passengers: d.pax || 1,
+    cabin_class: "economy",
+  };
+  return {
+    action: "flight_search",
+    flightParams: params,
+    reply: `Searching live flights for ${params.origin} → ${params.destination}` +
+      `${tripType === "round_trip" ? " (round trip)" : ""}, ${params.passengers} traveller${params.passengers > 1 ? "s" : ""}… one moment.`,
+    items: [], chips: [], flow: null,
+  };
+}
+
 export function runConcierge(rawMessage, ctx) {
   const { persona, balance, cartTotal = 0, cartCount = 0, flow } = ctx;
   const budget = Math.max(0, balance - cartTotal); // spendable right now
+  // Card gate: never recommend a reward this persona's cards can't redeem.
+  const vis = (arr) => (arr || []).filter((i) => i && visibleTo(i, persona));
   const t = (rawMessage || "").toLowerCase().trim();
   const pick = itemById(persona.pickId);
   const inCartNote = cartTotal > 0 ? ` (you have ${fmt(cartTotal)} pts reserved in your cart)` : "";
@@ -680,46 +795,107 @@ export function runConcierge(rawMessage, ctx) {
     };
   }
 
-  /* ---------- active journey: trip slot-filling, one question at a time ----------
-     A clear cross-intent signal (a product, gift card, cashback…) BREAKS OUT of
-     the trip flow and is handled below, so the user can pivot mid-conversation
-     ("actually, show me a camera") instead of it being mistaken for a destination.
-     A plain city/date answer has no such signal and stays in the flow. */
-  if (flow && flow.journey === "trip" && !switchesAwayFromTrip(t)) {
+  /* ---------- active journey: FLIGHT booking slot-filling (live Duffel) -------
+     One question at a time. Both "book a flight" AND "I'm planning a trip" open
+     this SAME journey now — there's only one trip-planning path in chat, and it
+     always ends in a real Duffel search, never the old hardcoded voucher dump.
+     When every slot is filled it hands the params to the bubble via
+     action:"flight_search", which calls the backend /travel/flights/search
+     (real Duffel) and books in-chat, matching the dedicated Travel page. A clear
+     cross-intent signal (a product, gift card, cashback…) breaks OUT of the flow
+     so the user can pivot mid-conversation ("actually, show me a camera"). */
+  if (flow && flow.journey === "flight" && !switchesAwayFromTrip(t)) {
+    const d = flow.data || {};
     if (flow.slot === "destination") {
       // user dodged the question → re-ask the SAME slot once, with suggestions
       if (has(t, "somewhere else", "not sure", "don't know", "dont know", "anywhere")) {
         return {
           reply: "No problem — tell me a city or region you're dreaming of, or pick one of these:",
-          items: [], chips: ["Goa", "Manali", "Dubai"],
-          flow: { journey: "trip", slot: "destination" },
+          items: [], chips: ["Goa", "Jaipur", "Dubai"],
+          flow: { journey: "flight", slot: "destination", data: d },
         };
       }
-      const dest = rawMessage.trim();
+      // the answer may carry the WHOLE route ("bangalore to USA") — fill both
+      // slots and never re-ask one the user already gave
+      const r = _parseRoute(t);
+      const origin = r.origin || d.origin || null;
+      if (!r.dest && r.destHint) {
+        return {
+          reply: `${r.destHint.country} is a big place — I can search live fares to ${r.destHint.chips.join(", ")}. Which city?`,
+          items: [], chips: r.destHint.chips,
+          flow: { journey: "flight", slot: "destination", data: { ...d, ...(origin ? { origin } : {}) } },
+        };
+      }
+      if (!r.dest) {
+        // unbookable/unknown place — catch it HERE instead of letting the live
+        // search 400 with "unrecognized origin/destination"
+        return {
+          reply: `I couldn't match “${rawMessage.trim()}” to an airport I can search live yet. Pick one of these, or name another major city:`,
+          items: [], chips: ["Goa", "Jaipur", "Dubai", "New York"],
+          flow: { journey: "flight", slot: "destination", data: { ...d, ...(origin ? { origin } : {}) } },
+        };
+      }
+      if (origin) {
+        return {
+          reply: `Got it — ${origin} to ${r.dest}. Round trip or one way?`,
+          items: [], chips: ["Round trip", "One way"],
+          flow: { journey: "flight", slot: "trip_type", data: { ...d, origin, dest: r.dest } },
+        };
+      }
       return {
-        reply: `${dest} sounds wonderful! And when are you thinking of going?`,
-        items: [], chips: ["This weekend", "Next month", "During the holidays", "Not sure yet"],
-        flow: { journey: "trip", slot: "dates", data: { dest } },
+        reply: `${r.dest} — great pick. Which city are you flying from?`,
+        items: [], chips: [(persona.cmr && persona.cmr.city) || "Mumbai", "Bengaluru", "Delhi"],
+        flow: { journey: "flight", slot: "origin", data: { ...d, dest: r.dest } },
       };
     }
-    if (flow.slot === "dates") {
-      const dest = (flow.data && flow.data.dest) || "your getaway";
-      const dt = t.includes("not sure") ? "whenever you're ready" : rawMessage.trim().toLowerCase();
-      let ids;
-      const d = dest.toLowerCase();
-      if (d.includes("goa")) ids = ["tv-marriott", "tv-indigo", "tv-lounge"];
-      else if (d.includes("manali") || d.includes("shimla")) ids = ["tv-manali", "tv-indigo", "tv-lounge"];
-      else if (d.includes("dubai") || d.includes("abroad") || d.includes("international")) ids = ["tv-ai-biz", "tv-lounge", "tv-indigo"];
-      else ids = ["tv-indigo", "tv-marriott", "tv-lounge"];
-      const items = orderByBudget(ids.map(itemById), budget);
-      const fam = (persona.cmr && persona.cmr.familySize) || 1;
-      const famNote = fam > 1 ? `I've planned for ${fam} — your usual party size from your profile. ` : "";
+    if (flow.slot === "origin") {
+      const origin = _extractFlightCity(t);
+      if (!origin) {
+        return {
+          reply: `I couldn't match “${rawMessage.trim()}” to an airport I can search from. Pick one, or name another major city:`,
+          items: [], chips: [(persona.cmr && persona.cmr.city) || "Mumbai", "Bengaluru", "Delhi"],
+          flow: { journey: "flight", slot: "origin", data: d },
+        };
+      }
       return {
-        reply: `Perfect — ${dest}, ${dt}. ${famNote}Here's how I'd put your ${fmt(budget)} spendable points to work; every figure is pre-verified:${budgetNote(items, budget)}`,
-        items,
-        chips: ["Best value for my points", "Show me travel options"],
-        flow: null,
+        reply: `Got it — ${origin} to ${d.dest}. Round trip or one way?`,
+        items: [], chips: ["Round trip", "One way"],
+        flow: { journey: "flight", slot: "trip_type", data: { ...d, origin } },
       };
+    }
+    if (flow.slot === "trip_type") {
+      const tripType = has(t, "one way", "oneway", "single", "one-way") ? "one_way" : "round_trip";
+      return {
+        reply: "When do you want to depart?",
+        items: [], chips: ["This weekend", "Next weekend", "Next month"],
+        flow: { journey: "flight", slot: "depart", data: { ...d, tripType } },
+      };
+    }
+    if (flow.slot === "depart") {
+      const departIso = resolveDateISO(rawMessage);
+      if (d.tripType === "one_way") {
+        return {
+          reply: `Leaving ${departIso}. How many travellers?`,
+          items: [], chips: _paxChips(persona),
+          flow: { journey: "flight", slot: "pax", data: { ...d, departIso } },
+        };
+      }
+      return {
+        reply: `Leaving ${departIso}. And when do you fly back?`,
+        items: [], chips: ["3 days later", "A week later", "2 weeks later"],
+        flow: { journey: "flight", slot: "return", data: { ...d, departIso } },
+      };
+    }
+    if (flow.slot === "return") {
+      const returnIso = resolveReturnISO(d.departIso, rawMessage);
+      return {
+        reply: "How many travellers?",
+        items: [], chips: _paxChips(persona),
+        flow: { journey: "flight", slot: "pax", data: { ...d, returnIso } },
+      };
+    }
+    if (flow.slot === "pax") {
+      return _flightSearchStep({ ...d, pax: _parsePax(t, persona) });
     }
   }
 
@@ -746,6 +922,49 @@ export function runConcierge(rawMessage, ctx) {
      "travel options") deliberately don't match here and fall through to the
      category browse below. */
   const wantsToBrowse = has(t, "option", "show me", "browse", "what's in", "whats in", "list");
+
+  /* ---------- start the FLIGHT booking journey (real Duffel via backend) ------
+     Booking intent ("book a flight", "flight tickets", "fly to Goa", "book real
+     flights there") opens a real slot-filled conversation ending in a LIVE
+     Duffel search + in-chat booking — NOT the hardcoded voucher dump below.
+     Browse asks ("show me flight options") still fall through to the catalogue
+     browse. If they named the city inline we skip straight to the origin. */
+  const wantsFlightBooking = !wantsToBrowse && has(t,
+    "book flight", "book a flight", "book flights", "book me a flight", "book my flight",
+    "book real flight", "book real flights", "real flights", "flight ticket", "flight tickets",
+    "air ticket", "air tickets", "fly to", "flights to", "want to fly", "i want to fly",
+    "wanna fly", "book air", "reserve a flight", "search flights", "find flights", "find me a flight");
+  if (wantsFlightBooking) {
+    // one message may carry the whole route ("book a flight bangalore to dubai")
+    const r = _parseRoute(t);
+    if (r.origin && r.dest) {
+      return {
+        reply: `Let's book it — ${r.origin} to ${r.dest}. Round trip or one way?`,
+        items: [], chips: ["Round trip", "One way"],
+        flow: { journey: "flight", slot: "trip_type", data: { origin: r.origin, dest: r.dest } },
+      };
+    }
+    if (!r.dest && r.destHint) {
+      return {
+        reply: `${r.destHint.country} is a big place — I can search live fares to ${r.destHint.chips.join(", ")}. Which city?`,
+        items: [], chips: r.destHint.chips,
+        flow: { journey: "flight", slot: "destination", data: r.origin ? { origin: r.origin } : {} },
+      };
+    }
+    if (r.dest) {
+      return {
+        reply: `Let's book it — flying to ${r.dest}. Which city are you flying from?`,
+        items: [], chips: [(persona.cmr && persona.cmr.city) || "Mumbai", "Bengaluru", "Delhi"],
+        flow: { journey: "flight", slot: "origin", data: { dest: r.dest } },
+      };
+    }
+    return {
+      reply: "Happy to book you a real flight! Where do you want to fly to?",
+      items: [], chips: ["Goa", "Delhi", "Dubai", "Mumbai"],
+      flow: { journey: "flight", slot: "destination", data: {} },
+    };
+  }
+
   if (!wantsToBrowse && has(t,
         "planning a trip", "plan a trip", "planning trip", "plan my trip", "book a trip",
         "going on a trip", "go on a trip", "take a trip", "want to travel", "wanna travel",
@@ -755,59 +974,50 @@ export function runConcierge(rawMessage, ctx) {
     return {
       reply: "Exciting! Where are you headed?",
       items: [],
-      chips: ["Goa", "Manali", "Dubai", "Somewhere else"],
-      flow: { journey: "trip", slot: "destination" },
+      chips: ["Goa", "Jaipur", "Dubai", "Somewhere else"],
+      flow: { journey: "flight", slot: "destination", data: {} },
     };
   }
 
   /* ---------- category browses (budget-ordered + flagged; off-lean browses get
      a gentle redirect nudge that never blocks the browse — strategy (b)) ---------- */
   if (has(t, "travel", "flight", "trip", "getaway", "vacation", "holiday", "hotel", "stay", "lounge")) {
-    const found = searchCatalogue(t, { category: "travel" });
-    const items = orderByBudget(found.length ? found.map((f) => f.item)
-      : [itemById("tv-indigo"), itemById("tv-marriott"), itemById("tv-itc"), itemById("tv-lounge")], budget);
+    const items = orderByBudget(vis([itemById("tv-indigo"), itemById("tv-marriott"), itemById("tv-itc")]), budget);
     const nudge = laneNudge("travel");
-    const why = found.length ? ` I led with the ${items[0].name} because it ${whyPick(items[0], budget, found[0].matched)}.` : "";
     return {
-      reply: `Here are your top travel redemptions — I've led with the ones that fit your ${fmt(budget)} spendable points:${budgetNote(items, budget)}${why}${nudge.text}`,
+      reply: `Here are your top travel redemptions — I've led with the ones that fit your ${fmt(budget)} spendable points:${budgetNote(items, budget)}${nudge.text}`,
       items, chips: withNudge(["I'm planning a trip", "Best value for my points"], nudge), flow: null,
     };
   }
   if (has(t, "merchandise", "gadget", "product", "electronics", "appliance", "home") || productWordsIn(t).length) {
     const found = findProducts(t, budget);
-    const items = found ? found.items
-      : orderByBudget([itemById("md-sony"), itemById("md-airpods"), itemById("md-airfryer"), itemById("md-canon")], budget);
+    const foundItems = found ? vis(found.items) : [];
+    const items = foundItems.length ? foundItems
+      : orderByBudget(vis([itemById("md-sony"), itemById("md-airpods"), itemById("md-airfryer")]), budget);
     const nudge = laneNudge("merchandise");
-    const lead = found
-      ? `Good pick — here ${found.items.length > 1 ? "are the closest matches" : "is the closest match"} for a ${found.words[0]} in the store, priced in points:`
-      : `Popular merchandise picks — real products, priced in points:`;
-    const why = found
-      ? ` I led with the ${items[0].name} because it matches "${found.words[0]}" and is ${items[0].points <= budget ? "within your spendable points" : `${fmt(items[0].points - budget)} pts over budget`}.`
-      : "";
+    const lead = foundItems.length
+      ? `Good pick — here ${foundItems.length > 1 ? "are the closest matches" : "is the closest match"} for a ${found.words[0]} in the store, priced in points:`
+      : found
+        ? `The ${found.words[0]} options in the catalogue need a premium card your account doesn't hold — here's what your cards CAN redeem instead:`
+        : `Popular merchandise picks — real products, priced in points:`;
     return {
-      reply: `${lead}${budgetNote(items, budget)}${why}${nudge.text}`,
+      reply: `${lead}${budgetNote(items, budget)}${nudge.text}`,
       items, chips: withNudge(["Best value for my points", "Show me travel options"], nudge), flow: null,
     };
   }
   if (has(t, "gift card", "gift cards", "voucher", "amazon", "flipkart", "zomato", "swiggy", "myntra", "dining", "food")) {
-    const found = searchCatalogue(t, { category: "giftcards" });
-    const items = orderByBudget(found.length ? found.map((f) => f.item)
-      : [itemById("gc-taj"), itemById("gc-amazon"), itemById("gc-zomato"), itemById("gc-swiggy")], budget);
+    const items = orderByBudget(vis([itemById("gc-taj"), itemById("gc-amazon"), itemById("gc-zomato")]), budget);
     const nudge = laneNudge("giftcards");
-    const why = found.length ? ` I led with the ${items[0].name} because it ${whyPick(items[0], budget, found[0].matched)}.` : "";
     return {
-      reply: `Instant e-vouchers, straight to your inbox:${budgetNote(items, budget)}${why}${nudge.text}`,
+      reply: `Instant e-vouchers, straight to your inbox:${budgetNote(items, budget)}${nudge.text}`,
       items, chips: withNudge(["Best value for my points", "What's in merchandise?"], nudge), flow: null,
     };
   }
   if (has(t, "cashback", "cash back", "statement credit", "money back")) {
-    const found = searchCatalogue(t, { category: "cashback" });
-    const items = orderByBudget(found.length ? found.map((f) => f.item)
-      : [itemById("cb-10000"), itemById("cb-5000"), itemById("cb-2500"), itemById("cb-1000")], budget);
+    const items = orderByBudget(vis([itemById("cb-10000"), itemById("cb-5000"), itemById("cb-2500")]), budget);
     const nudge = laneNudge("cashback");
-    const why = found.length ? ` I led with the ${items[0].name} because it ${whyPick(items[0], budget, found[0].matched)}.` : "";
     return {
-      reply: `Prefer cash? These credit straight to your account — higher tiers give a little more per point:${budgetNote(items, budget)}${why}${nudge.text}`,
+      reply: `Prefer cash? These credit straight to your account — higher tiers give a little more per point:${budgetNote(items, budget)}${nudge.text}`,
       items, chips: withNudge(["Best value for my points", "Show me travel options"], nudge), flow: null,
     };
   }
@@ -815,7 +1025,7 @@ export function runConcierge(rawMessage, ctx) {
   /* ---------- pure rupee-per-point optimizer (ONLY when the user explicitly
      asks to maximise rupee value — this figure is objective, not personalized). */
   if (has(t, "bang for", "per point", "most rupees", "rupee value", "highest value", "maximise value", "maximize value")) {
-    const best = orderByBudget(topByValue([...CATALOGUE.giftcards, ...CATALOGUE.cashback], 3).map((i) => itemById(i.id)), budget);
+    const best = orderByBudget(vis(topByValue([...CATALOGUE.giftcards, ...CATALOGUE.cashback], 3).map((i) => itemById(i.id))), budget);
     return {
       reply: `Pound for pound, these give you the most rupee value per point:${budgetNote(best, budget)}`,
       items: best, chips: ["Show me travel options", "What's in merchandise?"], flow: null,
@@ -831,9 +1041,9 @@ export function runConcierge(rawMessage, ctx) {
      phrases also contain "my points". ---------- */
   if (/spend|use (my )?points|what should i|suggest|recommend|ideas|help me|not sure|surprise me|best way|best value|value for my points|most value|worth it|worthwhile/.test(t)) {
     const lean = leanRecs(persona);
-    const items = orderByBudget(lean.ids.map(itemById), budget);
+    const items = orderByBudget(vis(lean.ids.map(itemById)), budget);
     return {
-      reply: `Since your profile leans toward ${lean.word} ${lean.emoji}, I started there — these fit your ${fmt(budget)} spendable points:${budgetNote(items, budget)} I led with the ${items[0].name} because it's your top ${lean.word} pick and fits your budget. Want a different lane? Just tap below.`,
+      reply: `Since your profile leans toward ${lean.word} ${lean.emoji}, I started there — these fit your ${fmt(budget)} spendable points:${budgetNote(items, budget)} Want a different lane? Just tap below.`,
       items,
       chips: lean.switchChips,
       flow: null,
@@ -847,26 +1057,6 @@ export function runConcierge(rawMessage, ctx) {
         ? `You have ${fmt(balance)} points, with ${fmt(cartTotal)} pts reserved in your cart — so ${fmt(budget)} pts spendable right now. Want me to find the smartest way to use them?`
         : `You currently have ${fmt(balance)} points to spend. Want me to find the smartest way to use them?`,
       items: [], chips: ["Best value for my points", "Show me travel options", "What's in merchandise?"], flow: null,
-    };
-  }
-
-  /* ---------- catch-all catalogue search: ANY reward, ANY category ----------
-     Covers free text that didn't hit one of the category blocks above (e.g.
-     "noise cancelling headphones", "a Bali honeymoon", "something for my
-     mom's birthday") by searching every one of the 200+ rewards in ALL_ITEMS
-     by name / category / topical-keyword, then explaining WHY the top pick
-     surfaced — derived from the actual match + the user's real spendable
-     budget, never invented. ---------- */
-  const globalFound = searchCatalogue(t);
-  if (globalFound.length) {
-    const items = orderByBudget(globalFound.map((f) => f.item), budget);
-    const top = items[0];
-    const matched = (globalFound.find((f) => f.item.id === top.id) || {}).matched;
-    return {
-      reply: `Here's what I found for "${rawMessage.trim()}":${budgetNote(items, budget)} I led with the ${top.name} because it ${whyPick(top, budget, matched)}.`,
-      items,
-      chips: ["Best value for my points", "Show me travel options", "What's in merchandise?"],
-      flow: null,
     };
   }
 

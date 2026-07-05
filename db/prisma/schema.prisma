@@ -203,7 +203,6 @@ model Preference {
   preferredHotelChains       String[]  @default([]) @map("preferred_hotel_chains")
   preferredCuisines          String[]  @default([]) @map("preferred_cuisines")
   dietaryRestrictions        String[]  @default([]) @map("dietary_restrictions")
-  familySize                 Int       @default(1) @map("family_size")
   updatedAt                  DateTime  @updatedAt @map("updated_at") @db.Timestamptz
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   @@map("preferences")

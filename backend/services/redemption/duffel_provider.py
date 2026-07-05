@@ -202,8 +202,26 @@ class DuffelProvider(RedemptionProvider):
                             ref = order.get("booking_reference") or order.get("id")
                             steps.append({"label": "Booking flight", "status": "done", "detail": f"{offer['owner']['name']} · {ref}"})
                             steps.append({"label": "Sending confirmation", "status": "done", "detail": ref})
+                            slice_info = self._slice_summary(offer)
+                            ticket = {
+                                "pnr": order.get("booking_reference"),
+                                "order_id": order.get("id"),
+                                "airline": offer["owner"]["name"],
+                                "origin": origin,
+                                "destination": destination,
+                                "depart_date": dep,
+                                "departing_at": slice_info.get("departing_at"),
+                                "arriving_at": slice_info.get("arriving_at"),
+                                "stops": slice_info.get("stops"),
+                                "cabin": cabin,
+                                "amount": pay_amount,
+                                "currency": pay_currency,
+                                "passengers": [
+                                    {"name": f"{p['given_name']} {p['family_name']}"} for p in passengers_payload
+                                ],
+                            }
                             return BookingResult(ok=True, confirmation_reference=ref, steps=steps,
-                                                 raw={"order_id": order.get("id")})
+                                                 raw={"order_id": order.get("id"), "ticket": ticket})
                         try:
                             errs = resp.json().get("errors", [])
                             last_err = (errs[0].get("title") if errs else f"HTTP {resp.status_code}")
