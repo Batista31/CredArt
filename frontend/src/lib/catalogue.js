@@ -576,6 +576,90 @@ function switchesAwayFromTrip(t) {
             "statement credit", "merchandise", "electronics", "gadget", "appliance");
 }
 
+/* ---- FLIGHT booking flow helpers (real Duffel via the backend) ------------
+   The bubble gathers context one question at a time (destination → origin →
+   trip type → dates → travellers) then hands these params to the backend
+   /travel/flights/search (live Duffel). Dates are resolved to ISO HERE — no
+   LLM — mirroring dialogue_manager.py's _resolve_date so we never book in the
+   past. City NAMES are passed straight through; the backend resolves them to
+   IATA (same CITY_TO_IATA map the chat flight flow uses). */
+const _iso = (d) => d.toISOString().slice(0, 10);
+
+export function resolveDateISO(text) {
+  const t = (text || "").toLowerCase().trim();
+  const m = t.match(/\d{4}-\d{2}-\d{2}/);
+  if (m) return m[0];
+  const now = new Date();
+  const add = (n) => { const d = new Date(now); d.setDate(d.getDate() + n); return _iso(d); };
+  // next occurrence of a weekday (0=Sun … 6=Sat), always in the future
+  const nextDOW = (target) => { const d = new Date(now); const diff = ((target - d.getDay() + 7) % 7) || 7; d.setDate(d.getDate() + diff); return d; };
+  if (t.includes("today")) return _iso(now);
+  if (t.includes("tomorrow")) return add(1);
+  if (t.includes("next weekend")) { const sat = nextDOW(6); sat.setDate(sat.getDate() + 7); return _iso(sat); }
+  if (t.includes("weekend")) return _iso(nextDOW(6));
+  if (t.includes("next month")) return add(30);
+  if (t.includes("fortnight") || t.includes("2 week") || t.includes("two week")) return add(14);
+  if (t.includes("next week")) return add(7);
+  if (t.includes("holiday") || t.includes("holidays")) return add(45);
+  return add(21); // sensible default a few weeks out
+}
+
+function resolveReturnISO(departIso, text) {
+  const t = (text || "").toLowerCase();
+  const base = new Date(departIso);
+  const add = (n) => { const d = new Date(base); d.setDate(d.getDate() + n); return _iso(d); };
+  const m = t.match(/(\d+)\s*day/); if (m) return add(parseInt(m[1], 10));
+  if (t.includes("2 week") || t.includes("two week")) return add(14);
+  if (t.includes("week")) return add(7);
+  if (t.includes("weekend")) return add(2);
+  return add(3);
+}
+
+/* Cities the backend can resolve (subset of CITY_TO_IATA) — used to detect an
+   inline destination like "fly to Goa" so we can skip the first question. */
+const _FLIGHT_CITIES = ["goa", "delhi", "new delhi", "mumbai", "bengaluru", "bangalore",
+  "dubai", "hyderabad", "chennai", "kolkata", "pune", "ahmedabad", "kochi", "jaipur",
+  "singapore", "london", "abu dhabi", "bangkok", "paris", "maldives"];
+function _extractFlightCity(t) {
+  for (const c of _FLIGHT_CITIES) {
+    if (new RegExp(`\\b${c}\\b`).test(t)) return c.replace(/\b\w/g, (ch) => ch.toUpperCase());
+  }
+  return null;
+}
+
+function _paxChips(persona) {
+  const fam = (persona.cmr && persona.cmr.familySize) || 1;
+  return [["Just me", 1], ["2", 2], ["3", 3], ["4", 4]].map(([label, n]) =>
+    (fam === n ? `${label} (usual)` : label));
+}
+function _parsePax(t, persona) {
+  if (/just me|solo|only me|myself|alone/.test(t)) return 1;
+  const m = t.match(/(\d+)/); if (m) return Math.max(1, Math.min(9, parseInt(m[1], 10)));
+  return (persona.cmr && persona.cmr.familySize) || 1;
+}
+
+/* Terminal step of the flight flow: package the collected slots into a search
+   the bubble runs against the live Duffel endpoint. */
+function _flightSearchStep(d) {
+  const tripType = d.tripType || "round_trip";
+  const params = {
+    trip_type: tripType,
+    origin: d.origin,
+    destination: d.dest,
+    depart_date: d.departIso,
+    return_date: tripType === "one_way" ? null : d.returnIso,
+    passengers: d.pax || 1,
+    cabin_class: "economy",
+  };
+  return {
+    action: "flight_search",
+    flightParams: params,
+    reply: `Searching live flights for ${params.origin} → ${params.destination}` +
+      `${tripType === "round_trip" ? " (round trip)" : ""}, ${params.passengers} traveller${params.passengers > 1 ? "s" : ""}… one moment.`,
+    items: [], chips: [], flow: null,
+  };
+}
+
 export function runConcierge(rawMessage, ctx) {
   const { persona, balance, cartTotal = 0, cartCount = 0, flow } = ctx;
   const budget = Math.max(0, balance - cartTotal); // spendable right now
@@ -664,9 +748,68 @@ export function runConcierge(rawMessage, ctx) {
       return {
         reply: `Perfect — ${dest}, ${dt}. ${famNote}Here's how I'd put your ${fmt(budget)} spendable points to work; every figure is pre-verified:${budgetNote(items, budget)}`,
         items,
-        chips: ["Best value for my points", "Show me travel options"],
+        chips: ["Book real flights there", "Best value for my points", "Show me travel options"],
         flow: null,
       };
+    }
+  }
+
+  /* ---------- active journey: FLIGHT booking slot-filling (live Duffel) -------
+     One question at a time, exactly like the trip flow. When every slot is
+     filled it hands the params to the bubble via action:"flight_search", which
+     calls the backend /travel/flights/search (real Duffel) and books in-chat.
+     A clear cross-intent signal breaks out, same as the trip flow. */
+  if (flow && flow.journey === "flight" && !switchesAwayFromTrip(t)) {
+    const d = flow.data || {};
+    if (flow.slot === "destination") {
+      const dest = _extractFlightCity(t) || rawMessage.trim();
+      return {
+        reply: `${dest} — great pick. Which city are you flying from?`,
+        items: [], chips: [(persona.cmr && persona.cmr.city) || "Mumbai", "Bengaluru", "Delhi"],
+        flow: { journey: "flight", slot: "origin", data: { ...d, dest } },
+      };
+    }
+    if (flow.slot === "origin") {
+      const origin = _extractFlightCity(t) || rawMessage.trim();
+      return {
+        reply: `Got it — ${origin} to ${d.dest}. Round trip or one way?`,
+        items: [], chips: ["Round trip", "One way"],
+        flow: { journey: "flight", slot: "trip_type", data: { ...d, origin } },
+      };
+    }
+    if (flow.slot === "trip_type") {
+      const tripType = has(t, "one way", "oneway", "single", "one-way") ? "one_way" : "round_trip";
+      return {
+        reply: "When do you want to depart?",
+        items: [], chips: ["This weekend", "Next weekend", "Next month"],
+        flow: { journey: "flight", slot: "depart", data: { ...d, tripType } },
+      };
+    }
+    if (flow.slot === "depart") {
+      const departIso = resolveDateISO(rawMessage);
+      if (d.tripType === "one_way") {
+        return {
+          reply: `Leaving ${departIso}. How many travellers?`,
+          items: [], chips: _paxChips(persona),
+          flow: { journey: "flight", slot: "pax", data: { ...d, departIso } },
+        };
+      }
+      return {
+        reply: `Leaving ${departIso}. And when do you fly back?`,
+        items: [], chips: ["3 days later", "A week later", "2 weeks later"],
+        flow: { journey: "flight", slot: "return", data: { ...d, departIso } },
+      };
+    }
+    if (flow.slot === "return") {
+      const returnIso = resolveReturnISO(d.departIso, rawMessage);
+      return {
+        reply: "How many travellers?",
+        items: [], chips: _paxChips(persona),
+        flow: { journey: "flight", slot: "pax", data: { ...d, returnIso } },
+      };
+    }
+    if (flow.slot === "pax") {
+      return _flightSearchStep({ ...d, pax: _parsePax(t, persona) });
     }
   }
 
@@ -693,6 +836,34 @@ export function runConcierge(rawMessage, ctx) {
      "travel options") deliberately don't match here and fall through to the
      category browse below. */
   const wantsToBrowse = has(t, "option", "show me", "browse", "what's in", "whats in", "list");
+
+  /* ---------- start the FLIGHT booking journey (real Duffel via backend) ------
+     Booking intent ("book a flight", "flight tickets", "fly to Goa", "book real
+     flights there") opens a real slot-filled conversation ending in a LIVE
+     Duffel search + in-chat booking — NOT the hardcoded voucher dump below.
+     Browse asks ("show me flight options") still fall through to the catalogue
+     browse. If they named the city inline we skip straight to the origin. */
+  const wantsFlightBooking = !wantsToBrowse && has(t,
+    "book flight", "book a flight", "book flights", "book me a flight", "book my flight",
+    "book real flight", "book real flights", "real flights", "flight ticket", "flight tickets",
+    "air ticket", "air tickets", "fly to", "flights to", "want to fly", "i want to fly",
+    "wanna fly", "book air", "reserve a flight", "search flights", "find flights", "find me a flight");
+  if (wantsFlightBooking) {
+    const knownDest = _extractFlightCity(t);
+    if (knownDest) {
+      return {
+        reply: `Let's book it — flying to ${knownDest}. Which city are you flying from?`,
+        items: [], chips: [(persona.cmr && persona.cmr.city) || "Mumbai", "Bengaluru", "Delhi"],
+        flow: { journey: "flight", slot: "origin", data: { dest: knownDest } },
+      };
+    }
+    return {
+      reply: "Happy to book you a real flight! Where do you want to fly to?",
+      items: [], chips: ["Goa", "Delhi", "Dubai", "Mumbai"],
+      flow: { journey: "flight", slot: "destination", data: {} },
+    };
+  }
+
   if (!wantsToBrowse && has(t,
         "planning a trip", "plan a trip", "planning trip", "plan my trip", "book a trip",
         "going on a trip", "go on a trip", "take a trip", "want to travel", "wanna travel",

@@ -450,11 +450,11 @@ function CategoryView({ theme, meta, balance, onView, onBack }) {
 }
 
 /* ---------------- main ---------------- */
-export function RewardsCatalogue({ theme, initialCategory = null, onExit }) {
+export function RewardsCatalogue({ theme, initialCategory = null, onExit, onOpenTravel }) {
   const [activeUserId, setActiveUserId] = React.useState(getActiveUser());
   const [balances, setBalances] = React.useState(() =>
     Object.fromEntries(Object.values(CAT_PERSONAS).map((p) => [p.id, p.points])));
-  const [categoryKey, setCategoryKey] = React.useState(initialCategory);
+  const [categoryKey, setCategoryKey] = React.useState(initialCategory === "travel" ? null : initialCategory);
   const [modalItem, setModalItem] = React.useState(null);
   const [carts, setCarts] = React.useState(() =>
     Object.fromEntries(Object.values(CAT_PERSONAS).map((p) => [p.id, []])));
@@ -538,7 +538,8 @@ export function RewardsCatalogue({ theme, initialCategory = null, onExit }) {
               <div style={{ display: "grid", gap: 20, gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
                 {CATEGORY_META.map((meta, i) => (
                   <CategoryCard key={meta.key} theme={theme} meta={meta} count={CATALOGUE[meta.key].length}
-                    onOpen={() => setCategoryKey(meta.key)} delay={i * 70} />
+                    onOpen={() => (meta.key === "travel" && onOpenTravel ? onOpenTravel() : setCategoryKey(meta.key))}
+                    delay={i * 70} />
                 ))}
               </div>
             </>
@@ -573,6 +574,8 @@ export function RewardsCatalogue({ theme, initialCategory = null, onExit }) {
         cartTotal={cart.reduce((a, i) => a + i.points, 0)}
         onAddToCart={addToCart} onViewItem={viewFromChat}
         onCheckout={() => { if (cart.length === 0) return; setModalItem(null); setShowCart(false); setCheckingOut(true); }}
+        onSpend={(pts) => setBalances((b) => ({ ...b, [activeUserId]: Math.max(0, b[activeUserId] - pts) }))}
+        onOpenTravel={onOpenTravel}
         view="laptop" />
     </div>
   );

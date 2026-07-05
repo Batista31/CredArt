@@ -37,6 +37,7 @@ from .dialogue_manager import generate_concierge_response
 from .dining import router as dining_router
 from .entertainment import router as entertainment_router
 from .intent import extract_intent
+from .travel import router as travel_router
 from .orchestrator import orchestrate
 from .schemas import (
     Address,
@@ -85,6 +86,11 @@ app.include_router(dining_router)
 # Entertainment & Cinema rewards concierge (TMDB now-playing + hardcoded rewards)
 # — self-contained router at /entertainment. Additive only; shares no bank state.
 app.include_router(entertainment_router)
+
+# Travel Rewards (flight search + demo redemption) — self-contained router at
+# /travel. Reuses the real Duffel provider + Riya's real demo_points bucket
+# (see travel.py docstring) but shares no routes/session state with /chat.
+app.include_router(travel_router)
 
 
 @app.get("/health")

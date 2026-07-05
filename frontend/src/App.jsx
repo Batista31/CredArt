@@ -13,11 +13,20 @@ import { THEMES } from "./theme.jsx";
 import { RewardsLogin } from "./components/RewardsLogin.jsx";
 import { RewardsLanding } from "./components/RewardsLanding.jsx";
 import { RewardsCatalogue } from "./components/RewardsCatalogue.jsx";
+import { TravelPage } from "./components/travel/TravelPage.jsx";
 
 export default function App() {
   const theme = THEMES.rewards;
   const [stage, setStage] = React.useState("login");
   const [initialCat, setInitialCat] = React.useState(null);
+
+  function enter(cat) {
+    // Travel has its own dedicated search/results/review/confirm flow (a
+    // separate stage) instead of the catalogue's hardcoded category grid.
+    if (cat === "travel") { setStage("travel"); return; }
+    setInitialCat(cat || null);
+    setStage("store");
+  }
 
   return (
     <div style={{ minHeight: "100vh", background: theme.outerBg, ...theme.vars }}>
@@ -25,13 +34,14 @@ export default function App() {
         <RewardsLogin onLogin={() => setStage("landing")} />
       )}
       {stage === "landing" && (
-        <RewardsLanding theme={theme}
-          onEnter={(cat) => { setInitialCat(cat || null); setStage("store"); }}
-          onSignOut={() => setStage("login")} />
+        <RewardsLanding theme={theme} onEnter={enter} onSignOut={() => setStage("login")} />
       )}
       {stage === "store" && (
         <RewardsCatalogue theme={theme} initialCategory={initialCat}
-          onExit={() => setStage("landing")} />
+          onExit={() => setStage("landing")} onOpenTravel={() => setStage("travel")} />
+      )}
+      {stage === "travel" && (
+        <TravelPage theme={theme} onExit={() => setStage("landing")} />
       )}
     </div>
   );

@@ -13,6 +13,7 @@
  */
 import React from "react";
 import { api } from "../lib/api.js";
+import { travelApi } from "../lib/travelApi.js";
 import { KobieAvatar } from "./Kobie.jsx";
 import { runConcierge, greetingFor, CHAT_CHIPS, fmtPts, onImgError, rewardImgStyle } from "../lib/catalogue.js";
 
@@ -89,7 +90,53 @@ function InlineItem({ item, budget, onAsk, onView }) {
   );
 }
 
-export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, onAddToCart, onViewItem, onCheckout, view = "laptop" }) {
+/* Inline LIVE-flight card in the chat: airline, route, times, points, badges +
+   a Book (demo) button that redeems through the real backend endpoint. Every
+   number shown comes straight off the Duffel-priced offer — the bubble never
+   invents one. */
+function InlineFlight({ offer, onBook, busy }) {
+  const clock = (iso) => { try { return new Date(iso).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }); } catch { return "—"; } };
+  const dur = Math.round(offer.duration_minutes);
+  const durLabel = `${Math.floor(dur / 60)}h ${dur % 60}m`;
+  return (
+    <div style={{ padding: 10, background: "#fff", borderRadius: 14, border: "1.5px solid var(--hairline)",
+      boxShadow: "var(--sh-sm)", opacity: offer.affordable ? 1 : 0.94 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--ink)" }}>{offer.airline}</div>
+          <div style={{ fontSize: 11.5, color: "var(--ink-2)", fontWeight: 600, marginTop: 2 }}>
+            {clock(offer.departing_at)} {offer.origin} → {clock(offer.arriving_at)} {offer.destination}
+          </div>
+          <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginTop: 1 }}>
+            {durLabel} · {offer.stops === 0 ? "Non-stop" : offer.stops + " stop"}
+            {offer.trip_type === "round_trip" ? " · round trip" : ""}
+          </div>
+          <div style={{ display: "flex", gap: 4, marginTop: 5, flexWrap: "wrap" }}>
+            {(offer.badges || []).map((b) => (
+              <span key={b} style={{ fontSize: 9.5, fontWeight: 800, padding: "2px 7px", borderRadius: 999,
+                background: "var(--brand-50)", color: "var(--brand-700)", border: "1px solid var(--brand-200)" }}>{b}</span>
+            ))}
+          </div>
+        </div>
+        <div style={{ textAlign: "right", flexShrink: 0 }}>
+          <div className="num" style={{ fontSize: 13.5, fontWeight: 800, color: "var(--brand-600)" }}>{fmtPts(offer.points_required)}</div>
+          <div style={{ fontSize: 9.5, color: "var(--ink-3)" }}>₹{Number(offer.cash_price_inr).toLocaleString("en-IN")} value</div>
+          {!offer.affordable && (
+            <div style={{ fontSize: 9.5, color: "var(--amber)", fontWeight: 800, marginTop: 2 }}>points + cash</div>
+          )}
+        </div>
+      </div>
+      <button className="tap" disabled={busy} onClick={() => onBook(offer)}
+        style={{ marginTop: 8, width: "100%", padding: "7px 0", borderRadius: 999, border: "none",
+          cursor: busy ? "wait" : "pointer", color: "#fff", fontFamily: "var(--font)", fontWeight: 800, fontSize: 11.5,
+          background: "linear-gradient(160deg,var(--brand-600),var(--brand-700))" }}>
+        {offer.affordable ? "Book with points (demo)" : "Book with points + cash (demo)"}
+      </button>
+    </div>
+  );
+}
+
+export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, onAddToCart, onViewItem, onCheckout, onSpend, onOpenTravel, view = "laptop" }) {
   const [open, setOpen] = React.useState(false);
   const idc = React.useRef(0);
   const nid = () => ++idc.current;
@@ -143,6 +190,30 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
       return;
     }
 
+    // Chat-driven flight booking: the slot-filling finished — hit the LIVE Duffel
+    // search endpoint and render real flight cards inline (chat is the primary
+    // booking surface; every points/₹ figure is computed server-side).
+    if (local.action === "flight_search") {
+      push({ who: "bot", text: local.reply });
+      try {
+        const r = await travelApi.searchFlights(local.flightParams);
+        const flights = (r.results || []).slice(0, 3);
+        if (!flights.length) {
+          push({ who: "bot", text: "Hmm — no live flights came back for that route and date. Want to try different cities or dates?",
+            chips: ["Book a flight", "Show me travel options"] });
+        } else {
+          push({ who: "bot",
+            text: `Here are live options for ${r.origin} → ${r.destination}, real fares priced into points against your ${fmt(r.available_points)} travel points on ${r.card_name}. Tap to book (demo redemption):`,
+            flights, chips: onOpenTravel ? ["Open full Travel page"] : [] });
+        }
+      } catch {
+        push({ who: "bot", text: "I couldn't reach the live flight search just now — want me to show catalogue travel rewards instead?",
+          chips: ["Show me travel options"] });
+      }
+      setBusy(false);
+      return;
+    }
+
     if (local.reply != null) {
       // Local engine handled it — coherent reply + real catalogue cards.
       push({ who: "bot", text: local.reply, items: local.items || [], chips: local.chips || [] });
@@ -164,6 +235,38 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
   }
 
   function send() { const t = input.trim(); if (!t || busy) return; setInput(""); sendText(t); }
+
+  /* Chip taps normally re-enter the concierge as text; a couple are UI actions
+     (open the full Travel page) and are intercepted here instead. */
+  function handleChip(c) {
+    if (c === "Open full Travel page") { if (onOpenTravel) { setOpen(false); onOpenTravel(); } return; }
+    sendText(c);
+  }
+
+  /* Book a live flight straight from the chat via the real backend endpoint.
+     Points move server-side (Riya's replayable demo_points bucket); we mirror
+     the spend onto the store header so the visible balance stays consistent. */
+  async function handleBookFlight(offer) {
+    if (busy) return;
+    setBusy(true);
+    const mode = offer.affordable ? "points" : "points_plus_cash";
+    try {
+      const r = await travelApi.demoConfirm(offer.offer_id, mode);
+      if (r.status === "completed") {
+        if (onSpend) onSpend(r.points_used);
+        push({ who: "bot",
+          text: `✅ Booked! ${offer.airline} ${offer.origin}→${offer.destination}. Demo PNR ${r.booking_reference}. Redeemed ${fmtPts(r.points_used)}${r.cash_due_inr ? ` + ₹${fmt(r.cash_due_inr)}` : ""} — a simulated redemption, no real ticket issued.`,
+          chips: ["Book another flight", "Show me travel options"] });
+      } else {
+        push({ who: "bot", text: `That booking didn't go through: ${r.rollback_reason || "please try another option"}.`,
+          chips: ["Book a flight"] });
+      }
+    } catch {
+      push({ who: "bot", text: "The booking hit an error — please try again in a moment.", chips: ["Book a flight"] });
+    } finally {
+      setBusy(false);
+    }
+  }
 
   function handleAddToCart(item) {
     const res = onAddToCart(item); // parent adds to the per-persona cart
@@ -253,7 +356,7 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
                   {/* greeting quick chips */}
                   {m.intro && (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 7, paddingLeft: 34 }}>
-                      {CHAT_CHIPS.map((c, i) => <Chip key={c} delay={i * 60} onClick={() => sendText(c)}>{c}</Chip>)}
+                      {CHAT_CHIPS.map((c, i) => <Chip key={c} delay={i * 60} onClick={() => handleChip(c)}>{c}</Chip>)}
                     </div>
                   )}
 
@@ -267,10 +370,19 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
                     </div>
                   )}
 
+                  {/* inline LIVE flight cards (real Duffel offers, book in-chat) */}
+                  {m.flights && m.flights.length > 0 && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingLeft: 34, width: "100%", maxWidth: "94%" }}>
+                      {m.flights.map((o) => (
+                        <InlineFlight key={o.offer_id} offer={o} onBook={handleBookFlight} busy={busy} />
+                      ))}
+                    </div>
+                  )}
+
                   {/* follow-up chips (last message only) */}
                   {m.chips && m.chips.length > 0 && mi === messages.length - 1 && !busy && (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 7, paddingLeft: 34 }}>
-                      {m.chips.map((c, i) => <Chip key={c} delay={i * 55} onClick={() => sendText(c)}>{c}</Chip>)}
+                      {m.chips.map((c, i) => <Chip key={c} delay={i * 55} onClick={() => handleChip(c)}>{c}</Chip>)}
                     </div>
                   )}
                 </div>
