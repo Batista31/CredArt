@@ -34,5 +34,12 @@ export const travelApi = {
   demoConfirm: (offerId, paymentMode) =>
     jpost("/travel/redemption/demo-confirm", { offer_id: offerId, payment_mode: paymentMode }),
 
+  /* LIVE booking: real Duffel test order (real airline PNR), demo credits
+     debited, order recorded in account history, invoice emailed. */
+  confirm: (offerId, paymentMode) =>
+    jpost("/travel/redemption/confirm", { offer_id: offerId, payment_mode: paymentMode }),
+
+  orders: () => jget("/travel/orders"),
+
   health: () => jget("/travel/health"),
 };

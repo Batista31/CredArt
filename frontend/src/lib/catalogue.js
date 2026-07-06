@@ -1,27 +1,9 @@
-/* CredArt — Rewards Catalogue (Kobie-style store).
- *
- * FULLY HARDCODED, self-contained. No backend call fetches these items — the
- * catalogue "never changes", so a demo is always identical and replayable. The
- * floating CredArt chat runs a small LOCAL intent engine over this same data
- * (so every recommendation references a real catalogue item by name) and only
- * pings the real backend /chat as a best-effort enrichment for open-ended text.
- *
- * Points here are a self-contained demo bucket (Riya 84,500 · Samyak 50,000) —
- * deducting them never touches the bank ledger, so this cannot break the bank,
- * dining, or entertainment routes.
- */
+/* Rewards Catalogue: hardcoded, self-contained store data + a local intent
+   engine the chat bubble runs over it. Points are a demo bucket, not the bank. */
 import { USERS } from "./api.js";
 
-/* ------------------------------------------------------------------ */
-/* Reward imagery — a photo that ACTUALLY matches the reward.           */
-/*                                                                      */
-/* The old store used picsum seeded by slug: stable, but a random photo */
-/* (a camera reward could show a landscape). Instead we classify each   */
-/* reward to a topical keyword and pull a matching photo from a         */
-/* keyword-based image host, deterministically (a `lock` derived from   */
-/* the slug → the same photo every render). If that host is ever        */
-/* unreachable, the <img onError> falls back to `imgFallback`.          */
-/* ------------------------------------------------------------------ */
+/* Reward imagery: classify each reward to a keyword, pull a deterministic
+   topical photo (slug-locked), fall back via <img onError>. */
 const hashStr = (s) => {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
@@ -631,26 +613,12 @@ export const CHAT_CHIPS = [
   "I'm planning a trip",
 ];
 
-/* ------------------------------------------------------------------ */
-/* Local intent engine — aligned with the original bank concierge        */
-/* (dialogue_manager.py). Same interaction character:                    */
-/*   · ONE question at a time (slot-filling: destination → dates),       */
-/*     never a form, never assuming a value the user didn't give        */
-/*   · clarify gate: a vague opener gets one clarifying question —       */
-/*     UNLESS the persona has a clear preference lean, in which case     */
-/*     we lead straight into that category with a "your profile leans    */
-/*     toward X, so I started there" preface + switch chips              */
-/*   · tap-to-answer chips on every follow-up question                   */
-/*   · CMR prefill notes ("I've planned for 2 — your usual party size")  */
-/*   · budget honesty: recommendations are checked against the user's    */
-/*     SPENDABLE points (balance − cart) BEFORE they try to redeem,      */
-/*     with over-budget items flagged up front                           */
-/*                                                                       */
-/* Returns { reply, items, chips, flow }. `flow` carries the dialogue     */
-/* state ({ journey, slot, data }); transient — never assumed across     */
-/* unrelated asks.                                                        */
-/* ------------------------------------------------------------------ */
+/* Local intent engine: one question at a time, persona-lean clarify gate,
+   tap chips, budget honesty. Returns { reply, items, chips, flow }. */
 const has = (t, ...words) => words.some((w) => t.includes(w));
+/* Word-boundary variant (accepts small regex fragments like "flights?") for
+   short words that hide inside others — "trip" inside "roadtrip". */
+const hasWord = (t, ...words) => words.some((w) => new RegExp(`\\b${w}\\b`).test(t));
 
 function topByValue(items, n) {
   return [...items]
@@ -706,14 +674,67 @@ const PRODUCT_WORDS = [
 // Whole-word match on the MESSAGE (so "tv" doesn't fire inside "Latvia"); name
 // matching in findProducts stays substring-based (so "Smart TV" still matches "tv").
 const productWordsIn = (t) => PRODUCT_WORDS.filter((w) => new RegExp(`\\b${w}(?:es|s)?\\b`).test(t));
+
+/* Query word → catalogue name substrings ("earphones" → AirPods/Buds/Airdopes). */
+const PRODUCT_SYNONYMS = {
+  earphone: ["airpods", "buds", "airdopes", "earphone"],
+  earbud: ["airpods", "buds", "airdopes"],
+  airpod: ["airpods"],
+  headphone: ["headphone", "airpods", "buds"],
+  speaker: ["speaker", "echo"],
+  soundbar: ["speaker"],
+  camera: ["camera", "gopro", "dji", "pixma"],
+  smartwatch: ["watch", "band", "colorfit", "fitbit"],
+  "apple watch": ["apple watch"],
+  watch: ["watch", "band", "colorfit", "fitbit"],
+  television: ["tv"],
+  "smart tv": ["tv"],
+  tv: [" tv", "tv "],
+  laptop: ["laptop", "pavilion"],
+  tablet: ["ipad", "tab"],
+  vacuum: ["vacuum", "dyson v8"],
+  "hair dryer": ["hair dryer", "supersonic"],
+  shoes: ["shoes", "running"],
+  sneaker: ["shoes"],
+  suitcase: ["trolley", "duffel bag", "backpack"],
+  trolley: ["trolley"],
+  backpack: ["backpack"],
+  "power bank": ["power bank"],
+  coffee: ["coffee", "nespresso"],
+  cooker: ["cooker", "cooktop", "instant pot"],
+};
+
 function findProducts(t, budget, n = 3) {
   const words = productWordsIn(t);
   if (!words.length) return null;
+  const needles = words.flatMap((w) => PRODUCT_SYNONYMS[w] || [w]).map((s) => s.toLowerCase());
   const matches = ALL_ITEMS.filter(
-    (it) => it.category === "merchandise" && words.some((w) => it.name.toLowerCase().includes(w)));
-  if (!matches.length) return null;
+    (it) => it.category === "merchandise" && needles.some((s) => it.name.toLowerCase().includes(s)));
+  if (!matches.length) return { words, items: [] }; // asked for a product we don't stock
   return { words, items: orderByBudget(matches, budget).slice(0, n) };
 }
+
+/* Occasion → relevant gear ("roadtrip" → luggage/power bank/speaker). */
+const OCCASION_MERCH = [
+  [/road ?trip|camping|trek|hik(e|ing)|travel|trip|vacation|holiday|getaway/, ["trolley", "backpack", "power bank", "flip 6", "sunglasses", "gopro"]],
+  [/gym|workout|fitness|running|sport/, ["yoga", "shoes", "basketball", "fitbit", "band"]],
+  [/kitchen|cook|baking/, ["cooker", "mixer", "air fryer", "cookware", "induction", "tawa"]],
+  [/new (place|home|house|flat|apartment)|moving|shifting|unfurnished/, ["purifier", "fan", "cooker", "mixer", "iron", "microwave", "cooler"]],
+];
+function occasionMerch(t, budget, n = 3) {
+  for (const [re, needles] of OCCASION_MERCH) {
+    if (re.test(t)) {
+      const items = ALL_ITEMS.filter(
+        (it) => it.category === "merchandise" && needles.some((s) => it.name.toLowerCase().includes(s)));
+      if (items.length) return orderByBudget(items, budget).slice(0, n);
+    }
+  }
+  return null;
+}
+
+/* Voucher fallback: buy the exact thing, not a nearest-miss substitute. */
+const voucherFallbackItems = (budget) =>
+  orderByBudget([itemById("gc-amazon"), ALL_ITEMS.find((i) => i.name === "Amazon Gift Card ₹5,000"), itemById("gc-flipkart")].filter(Boolean), budget);
 
 /* ------------------------------------------------------------------ */
 /* Full-catalogue intent search — every one of the 200+ rewards in          */
@@ -832,11 +853,54 @@ function switchesAwayFromFood(t) {
    past. City NAMES are passed straight through; the backend resolves them to
    IATA (same CITY_TO_IATA map the chat flight flow uses). */
 const _iso = (d) => d.toISOString().slice(0, 10);
+/* "2026-07-23" → "Thu, 23 Jul 2026" for chat replies. */
+export const prettyDate = (iso) => {
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+};
+
+const _MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/* Explicit calendar date in free text: "23rd july", "july 23", "23/07",
+   "23-07-2026". Returns ISO or null. Year defaults to the next occurrence. */
+function _explicitDate(t) {
+  const now = new Date();
+  const mkFuture = (y, mo, d) => {
+    if (d < 1 || d > 31 || mo < 0 || mo > 11) return null;
+    let year = y;
+    // build a real Date only to bump the year forward if the date already passed
+    if (year == null) { year = now.getFullYear(); if (new Date(year, mo, d, 23, 59) < now) year += 1; }
+    // format from LOCAL components — toISOString() would shift a day in IST
+    return `${year}-${String(mo + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  };
+  // numeric: 23/07, 23-07-2026, 23.7
+  let m = t.match(/\b(\d{1,2})[/.\-](\d{1,2})(?:[/.\-](\d{2,4}))?\b/);
+  if (m) {
+    const d = +m[1], mo = +m[2] - 1;
+    const y = m[3] ? (m[3].length === 2 ? 2000 + +m[3] : +m[3]) : null;
+    if (d >= 1 && d <= 31 && mo >= 0 && mo <= 11) return mkFuture(y, mo, d);
+  }
+  // "23rd july" / "23 jul"
+  m = t.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]{3,})\b/);
+  if (m) {
+    const mo = _MONTHS.indexOf(m[2].slice(0, 3));
+    if (mo >= 0) return mkFuture(null, mo, +m[1]);
+  }
+  // "july 23"
+  m = t.match(/\b([a-z]{3,})\s+(\d{1,2})(?:st|nd|rd|th)?\b/);
+  if (m) {
+    const mo = _MONTHS.indexOf(m[1].slice(0, 3));
+    if (mo >= 0) return mkFuture(null, mo, +m[2]);
+  }
+  return null;
+}
 
 export function resolveDateISO(text) {
   const t = (text || "").toLowerCase().trim();
   const m = t.match(/\d{4}-\d{2}-\d{2}/);
   if (m) return m[0];
+  const explicit = _explicitDate(t);
+  if (explicit) return explicit;
   const now = new Date();
   const add = (n) => { const d = new Date(now); d.setDate(d.getDate() + n); return _iso(d); };
   // next occurrence of a weekday (0=Sun … 6=Sat), always in the future
@@ -856,6 +920,9 @@ function resolveReturnISO(departIso, text) {
   const t = (text || "").toLowerCase();
   const base = new Date(departIso);
   const add = (n) => { const d = new Date(base); d.setDate(d.getDate() + n); return _iso(d); };
+  // explicit return date ("back on 30th july") — must land after departure
+  const explicit = _explicitDate(t);
+  if (explicit && new Date(explicit) > base) return explicit;
   const m = t.match(/(\d+)\s*day/); if (m) return add(parseInt(m[1], 10));
   if (t.includes("2 week") || t.includes("two week")) return add(14);
   if (t.includes("week")) return add(7);
@@ -945,12 +1012,14 @@ function _flightSearchStep(d) {
     return_date: tripType === "one_way" ? null : d.returnIso,
     passengers: d.pax || 1,
     cabin_class: "economy",
+    preferences: d.prefs || null,
   };
+  const prefNote = d.prefs ? ` Noted: “${d.prefs}”.` : "";
   return {
     action: "flight_search",
     flightParams: params,
     reply: `Searching live flights for ${params.origin} → ${params.destination}` +
-      `${tripType === "round_trip" ? " (round trip)" : ""}, ${params.passengers} traveller${params.passengers > 1 ? "s" : ""}… one moment.`,
+      `${tripType === "round_trip" ? " (round trip)" : ""}, ${params.passengers} traveller${params.passengers > 1 ? "s" : ""}…${prefNote} one moment.`,
     items: [], chips: [], flow: null,
   };
 }
@@ -1010,15 +1079,9 @@ export function runConcierge(rawMessage, ctx) {
     };
   }
 
-  /* ---------- active journey: FLIGHT booking slot-filling (live Duffel) -------
-     One question at a time. Both "book a flight" AND "I'm planning a trip" open
-     this SAME journey now — there's only one trip-planning path in chat, and it
-     always ends in a real Duffel search, never the old hardcoded voucher dump.
-     When every slot is filled it hands the params to the bubble via
-     action:"flight_search", which calls the backend /travel/flights/search
-     (real Duffel) and books in-chat, matching the dedicated Travel page. A clear
-     cross-intent signal (a product, gift card, cashback…) breaks OUT of the flow
-     so the user can pivot mid-conversation ("actually, show me a camera"). */
+  /* Active flight journey: slot-fill one question at a time → live Duffel
+     search. Both "book a flight" and "plan a trip" enter here. A cross-intent
+     signal (product/gift card/cashback) breaks out mid-flow. */
   if (flow && flow.journey === "flight" && !switchesAwayFromTrip(t)) {
     const d = flow.data || {};
     if (flow.slot === "destination") {
@@ -1090,13 +1153,13 @@ export function runConcierge(rawMessage, ctx) {
       const departIso = resolveDateISO(rawMessage);
       if (d.tripType === "one_way") {
         return {
-          reply: `Leaving ${departIso}. How many travellers?`,
+          reply: `Leaving ${prettyDate(departIso)}. How many travellers?`,
           items: [], chips: _paxChips(persona),
           flow: { journey: "flight", slot: "pax", data: { ...d, departIso } },
         };
       }
       return {
-        reply: `Leaving ${departIso}. And when do you fly back?`,
+        reply: `Leaving ${prettyDate(departIso)}. And when do you fly back?`,
         items: [], chips: ["3 days later", "A week later", "2 weeks later"],
         flow: { journey: "flight", slot: "return", data: { ...d, departIso } },
       };
@@ -1104,13 +1167,21 @@ export function runConcierge(rawMessage, ctx) {
     if (flow.slot === "return") {
       const returnIso = resolveReturnISO(d.departIso, rawMessage);
       return {
-        reply: "How many travellers?",
+        reply: `Returning ${prettyDate(returnIso)}. How many travellers?`,
         items: [], chips: _paxChips(persona),
         flow: { journey: "flight", slot: "pax", data: { ...d, returnIso } },
       };
     }
     if (flow.slot === "pax") {
-      return _flightSearchStep({ ...d, pax: _parsePax(t, persona) });
+      return {
+        reply: "Last thing — any specific requests? Preferred airline, non-stop only, morning departure, a bag… or just say “find the best”.",
+        items: [], chips: ["Find the best", "Non-stop only", "Morning flights"],
+        flow: { journey: "flight", slot: "prefs", data: { ...d, pax: _parsePax(t, persona) } },
+      };
+    }
+    if (flow.slot === "prefs") {
+      const prefs = /\b(?:find the best|none|nothing|nope|anything|no preference|whatever)\b|^(?:no|any)$/.test(t) ? null : rawMessage.trim();
+      return _flightSearchStep({ ...d, prefs });
     }
   }
 
@@ -1319,28 +1390,37 @@ export function runConcierge(rawMessage, ctx) {
   }
 
   /* ---------- category browses (budget-ordered + flagged; off-lean browses get
-     a gentle redirect nudge that never blocks the browse — strategy (b)) ---------- */
-  if (has(t, "travel", "flight", "trip", "getaway", "vacation", "holiday", "hotel", "stay", "lounge")) {
-    const found = searchCatalogue(t, { category: "travel", persona });
-    const items = orderByBudget(found.length ? found.map((f) => f.item)
-      : vis([itemById("tv-indigo"), itemById("tv-marriott"), itemById("tv-itc")]), budget);
-    const nudge = laneNudge("travel");
-    const why = found.length && items[0] ? ` I led with the ${items[0].name} because it ${whyPick(items[0], budget, found[0].matched)}.` : "";
-    return {
-      reply: `Here are your top travel redemptions — I've led with the ones that fit your ${fmt(budget)} spendable points:${budgetNote(items, budget)}${why}${nudge.text}`,
-      items, chips: withNudge(["I'm planning a trip", "Best value for my points"], nudge), flow: null,
-    };
-  }
+     a gentle redirect nudge that never blocks the browse — strategy (b)).
+     MERCHANDISE is checked FIRST: "going on a roadtrip, want some merchandise"
+     names a trip but ASKS for merchandise — the ask wins, and the trip context
+     shapes WHICH merchandise (travel gear) instead of hijacking the intent. */
   if (has(t, "merchandise", "gadget", "product", "electronics", "appliance", "home") || productWordsIn(t).length) {
-    const found = findProducts(t, budget);
+    const found = findProducts(t, budget);       // specific product asked for?
     const foundItems = found ? vis(found.items) : [];
-    const items = foundItems.length ? foundItems
-      : orderByBudget(vis([itemById("md-sony"), itemById("md-airpods"), itemById("md-airfryer")]), budget);
     const nudge = laneNudge("merchandise");
+
+    // Asked for a product the store can't sell them (not stocked, or premium-
+    // card gated) → the honest path is a voucher: buy EXACTLY the one you want.
+    if (found && !foundItems.length) {
+      const vouchers = vis(voucherFallbackItems(budget));
+      const why = found.items.length
+        ? "need a premium card your account doesn't hold"
+        : "aren't stocked in the rewards catalogue";
+      return {
+        reply: `The ${found.words[0]} options ${why} — so instead of a nearest-miss substitute, grab an instant voucher and buy the exact model you want:${budgetNote(vouchers, budget)}`,
+        items: vouchers,
+        chips: ["What's in merchandise?", "Best value for my points"],
+        flow: null,
+      };
+    }
+
+    const occasion = foundItems.length ? null : occasionMerch(t, budget);
+    const items = foundItems.length ? foundItems
+      : (occasion || orderByBudget(vis([itemById("md-sony"), itemById("md-airpods"), itemById("md-airfryer")]), budget));
     const lead = foundItems.length
-      ? `Good pick — here ${foundItems.length > 1 ? "are the closest matches" : "is the closest match"} for a ${found.words[0]} in the store, priced in points:`
-      : found
-        ? `The ${found.words[0]} options in the catalogue need a premium card your account doesn't hold — here's what your cards CAN redeem instead:`
+      ? `Good pick — here ${foundItems.length > 1 ? "are the closest matches" : "is the closest match"} for ${/^[aeiou]/.test(found.words[0]) ? "an" : "a"} ${found.words[0]} in the store, priced in points:`
+      : occasion
+        ? `Nice — for that, here's the gear I'd grab from the store:`
         : `Popular merchandise picks — real products, priced in points:`;
     const why = foundItems.length && items[0]
       ? ` I led with the ${items[0].name} because it matches "${found.words[0]}" and is ${items[0].points <= budget ? "within your spendable points" : `${fmt(items[0].points - budget)} pts over budget`}.`
@@ -1348,6 +1428,19 @@ export function runConcierge(rawMessage, ctx) {
     return {
       reply: `${lead}${budgetNote(items, budget)}${why}${nudge.text}`,
       items, chips: withNudge(["Best value for my points", "Show me travel options"], nudge), flow: null,
+    };
+  }
+  // travel keywords are WORD-bounded so "roadtrip" (a merch context) never
+  // trips the travel branch the way substring matching did
+  if (hasWord(t, "travel", "flights?", "trip", "getaway", "vacation", "holidays?", "hotels?", "stay", "lounge")) {
+    const found = searchCatalogue(t, { category: "travel", persona });
+    const items = orderByBudget(found.length ? found.map((f) => f.item)
+      : vis([itemById("tv-indigo"), itemById("tv-marriott"), itemById("tv-itc")]), budget);
+    const nudge = laneNudge("travel");
+    const why = found.length && items[0] ? ` I led with the ${items[0].name} because it ${whyPick(items[0], budget, found[0].matched)}.` : "";
+    return {
+      reply: `Here are your top travel redemptions — I've led with the ones that fit your ${fmt(budget)} spendable points. Want to book a real flight instead? I can pull live fares.${budgetNote(items, budget)}${why}${nudge.text}`,
+      items, chips: withNudge(["Book a flight", "I'm planning a trip", "Best value for my points"], nudge), flow: null,
     };
   }
   if (has(t, "gift card", "gift cards", "voucher", "amazon", "flipkart", "zomato", "swiggy", "myntra", "dining", "food")) {
@@ -1427,6 +1520,26 @@ export function runConcierge(rawMessage, ctx) {
       reply: `Here's what I found for "${rawMessage.trim()}":${budgetNote(items, budget)} I led with the ${top.name} because it ${whyPick(top, budget, matched)}.`,
       items,
       chips: ["Best value for my points", "Show me travel options", "What's in merchandise?"],
+      flow: null,
+    };
+  }
+
+  /* Purchase intent for a specific item the catalogue doesn't stock (a phone
+     case, a controller…) — the search above found nothing real, so rather than
+     a nearest-miss substitute, offer the honest voucher fallback: buy exactly
+     what they asked for. */
+  const buy = t.match(/\b(?:buy|purchase|order|want|need|looking for|shop for|get(?: me)?|gift(?: for)?)\b\s+(.+)/);
+  if (buy && !/\bpoints?\b|\bcart\b/.test(buy[1])) {
+    const thing = buy[1]
+      .replace(/^(?:to\s+)?(?:buy|purchase|order|get|have|own|find|grab)\s+/, "") // nested verb ("want to buy")
+      .replace(/^(?:a |an |some |the |new |me )+/, "")
+      .split(/\b(?:for|from)\b/)[0]
+      .replace(/[^\w\s-]/g, "").trim().split(/\s+/).slice(0, 4).join(" ") || "that";
+    const vouchers = vis(voucherFallbackItems(budget));
+    return {
+      reply: `A ${thing} isn't something the rewards catalogue stocks directly — the cleanest way is an instant Amazon voucher you can spend on the exact ${thing} you want:${budgetNote(vouchers, budget)}`,
+      items: vouchers,
+      chips: ["What's in merchandise?", "Best value for my points"],
       flow: null,
     };
   }

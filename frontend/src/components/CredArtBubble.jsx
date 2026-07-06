@@ -106,32 +106,66 @@ function InlineItem({ item, budget, cartQty = 0, onAsk, onChangeQty, onView }) {
   );
 }
 
-/* Inline LIVE-flight card in the chat: airline, route, times, points, badges +
-   a Book (demo) button that redeems through the real backend endpoint. Every
-   number shown comes straight off the Duffel-priced offer — the bubble never
-   invents one. */
+/* Airline name → domain for a real logo (Google favicon service). */
+const AIRLINE_DOMAINS = [
+  ["indigo", "goindigo.in"], ["air india", "airindia.com"], ["vistara", "airvistara.com"],
+  ["spicejet", "spicejet.com"], ["akasa", "akasaair.com"], ["emirates", "emirates.com"],
+  ["qatar", "qatarairways.com"], ["singapore", "singaporeair.com"], ["british", "britishairways.com"],
+  ["lufthansa", "lufthansa.com"], ["thai", "thaiairways.com"], ["air asia", "airasia.com"],
+  ["airasia", "airasia.com"], ["etihad", "etihad.com"], ["klm", "klm.com"], ["air france", "airfrance.com"],
+];
+const airlineLogo = (name) => {
+  const n = (name || "").toLowerCase();
+  const hit = AIRLINE_DOMAINS.find(([kw]) => n.includes(kw));
+  return hit ? `https://www.google.com/s2/favicons?domain=${hit[1]}&sz=64` : null;
+};
+const fdate = (iso) => { try { return new Date(iso).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" }); } catch { return null; } };
+
+/* Inline LIVE-flight card: logo, airline, dated legs (both for round trips),
+   points, badges + a Book button hitting the real backend. Every number comes
+   straight off the Duffel-priced offer. */
 function InlineFlight({ offer, onBook, busy }) {
   const clock = (iso) => { try { return new Date(iso).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }); } catch { return "—"; } };
   const dur = Math.round(offer.duration_minutes);
   const durLabel = `${Math.floor(dur / 60)}h ${dur % 60}m`;
+  const logo = airlineLogo(offer.airline);
+  const roundTrip = offer.trip_type === "round_trip";
+  const outDate = fdate(offer.departing_at) || fdate(offer.depart_date);
+  const retDate = fdate(offer.return_departing_at) || fdate(offer.return_date);
+  const initials = (offer.airline_iata || offer.airline || "?").slice(0, 2).toUpperCase();
   return (
     <div style={{ padding: 10, background: "#fff", borderRadius: 14, border: "1.5px solid var(--hairline)",
       boxShadow: "var(--sh-sm)", opacity: offer.affordable ? 1 : 0.94 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--ink)" }}>{offer.airline}</div>
-          <div style={{ fontSize: 11.5, color: "var(--ink-2)", fontWeight: 600, marginTop: 2 }}>
-            {clock(offer.departing_at)} {offer.origin} → {clock(offer.arriving_at)} {offer.destination}
+        <div style={{ display: "flex", gap: 8, minWidth: 0 }}>
+          {/* airline logo (real favicon; initials fallback) */}
+          <div style={{ width: 30, height: 30, borderRadius: 8, flexShrink: 0, background: "var(--brand-50)",
+            border: "1px solid var(--hairline)", display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 10.5, fontWeight: 800, color: "var(--brand-700)", overflow: "hidden" }}>
+            {logo
+              ? <img src={logo} alt="" width="20" height="20" onError={(e) => { e.currentTarget.style.display = "none"; e.currentTarget.parentElement.textContent = initials; }} />
+              : initials}
           </div>
-          <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginTop: 1 }}>
-            {durLabel} · {offer.stops === 0 ? "Non-stop" : offer.stops + " stop"}
-            {offer.trip_type === "round_trip" ? " · round trip" : ""}
-          </div>
-          <div style={{ display: "flex", gap: 4, marginTop: 5, flexWrap: "wrap" }}>
-            {(offer.badges || []).map((b) => (
-              <span key={b} style={{ fontSize: 9.5, fontWeight: 800, padding: "2px 7px", borderRadius: 999,
-                background: "var(--brand-50)", color: "var(--brand-700)", border: "1px solid var(--brand-200)" }}>{b}</span>
-            ))}
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--ink)" }}>{offer.airline}</div>
+            <div style={{ fontSize: 11.5, color: "var(--ink-2)", fontWeight: 600, marginTop: 2 }}>
+              {clock(offer.departing_at)} {offer.origin} → {clock(offer.arriving_at)} {offer.destination}
+            </div>
+            <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginTop: 1 }}>
+              {outDate ? `${outDate} · ` : ""}{durLabel} · {offer.stops === 0 ? "Non-stop" : offer.stops + " stop"}
+            </div>
+            {roundTrip && (
+              <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginTop: 3, paddingTop: 3, borderTop: "1px dashed var(--hairline)" }}>
+                ↩ Return{retDate ? ` ${retDate}` : ""}
+                {offer.return_departing_at ? ` · ${clock(offer.return_departing_at)} ${offer.destination} → ${clock(offer.return_arriving_at)} ${offer.origin}` : ""}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 4, marginTop: 5, flexWrap: "wrap" }}>
+              {(offer.badges || []).map((b) => (
+                <span key={b} style={{ fontSize: 9.5, fontWeight: 800, padding: "2px 7px", borderRadius: 999,
+                  background: "var(--brand-50)", color: "var(--brand-700)", border: "1px solid var(--brand-200)" }}>{b}</span>
+              ))}
+            </div>
           </div>
         </div>
         <div style={{ textAlign: "right", flexShrink: 0 }}>
@@ -154,17 +188,14 @@ function InlineFlight({ offer, onBook, busy }) {
         style={{ marginTop: 8, width: "100%", padding: "7px 0", borderRadius: 999, border: "none",
           cursor: busy ? "wait" : "pointer", color: "#fff", fontFamily: "var(--font)", fontWeight: 800, fontSize: 11.5,
           background: "linear-gradient(160deg,var(--brand-600),var(--brand-700))" }}>
-        {offer.affordable ? "Book with points (demo)" : "Book with points + cash (demo)"}
+        {offer.affordable ? "Book with points" : "Book with points + cash"}
       </button>
     </div>
   );
 }
 
-/* Per-persona conversation memory — a LIST of past conversations (newest
-   first), so the bubble has a real chat history + "new chat", like the bank
-   concierge. Survives closing the bubble / reloading the page. Stored
-   client-side only (this store's points are a self-contained demo bucket
-   already); never touches the bank chat's Redis-backed history. */
+/* Per-persona chat history in localStorage: a list of past conversations
+   for the history drawer + "new chat". Survives reload. */
 const CONVOS_KEY = (personaId) => `credart_bubble_convos_${personaId}`;
 const HISTORY_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 3; // 3 days — stale resumes aren't useful
 const MAX_CONVOS = 8;
@@ -201,9 +232,7 @@ const convoTitle = (c) => {
   return firstUser.text.length > 44 ? firstUser.text.slice(0, 44) + "…" : firstUser.text;
 };
 
-/* One line of context for the resume prompt — "continue where you left off"
-   shouldn't be a memory test. Mid-flight bookings name the route; otherwise
-   the last thing the user asked is quoted. */
+/* One-line context for the resume prompt (route if mid-booking, else the ask). */
 function describeConvo(c) {
   const when = relTime(c.savedAt);
   // mid-booking → name the route (the most useful thing to be reminded of)
@@ -211,14 +240,13 @@ function describeConvo(c) {
     const d = c.flow.data || {};
     return `${when} you were booking a flight${d.dest ? ` to ${d.dest}` : ""}${d.origin ? ` from ${d.origin}` : ""}`;
   }
-  // a finished flight search also deserves the route, not the last chip tap
+  // a finished search → the route, not the last chip tap
   const flightMsg = [...(c.messages || [])].reverse().find((m) => m.flights && m.flights.length);
   if (flightMsg && flightMsg.flights[0]) {
     const f = flightMsg.flights[0];
     return `${when} you were comparing flights ${f.origin} → ${f.destination}`;
   }
-  // otherwise the OPENING ask carries the intent — the last message is usually
-  // just a chip answer ("Just me", "Round trip") that means nothing alone
+  // else the opening ask carries intent (last msg is usually a bare chip answer)
   const firstUser = (c.messages || []).find((m) => m.who === "user" && m.text);
   if (firstUser) {
     const txt = firstUser.text.length > 48 ? firstUser.text.slice(0, 48) + "…" : firstUser.text;
@@ -333,6 +361,26 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
     if (!text || busy) return;
     push({ who: "user", text });
     setBusy(true);
+
+    // Account order history straight from chat — real DB rows via /travel/orders.
+    if (/\b(my (orders|bookings)|order history|booking history|past (orders|bookings))\b/i.test(text)) {
+      try {
+        const orders = (await travelApi.orders()).slice(0, 5);
+        if (!orders.length) {
+          push({ who: "bot", text: "No bookings on your account yet — want to book a flight?", chips: ["Book a flight"] });
+        } else {
+          const lines = orders.map((o) =>
+            `${o.status === "completed" ? "✅" : "✖"} ${o.label} — ${fmt(o.points_used)} pts · ${o.booking_reference || o.rollback_reason || "—"} · ${new Date(o.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`);
+          push({ who: "bot", text: `Your recent bookings:\n${lines.join("\n")}`,
+            chips: ["Book a flight", "Show me travel options"] });
+        }
+      } catch {
+        push({ who: "bot", text: "I couldn't reach your order history just now — try again in a moment.", chips: [] });
+      }
+      setBusy(false);
+      return;
+    }
+
     const local = runConcierge(text, { persona, balance: balRef.current, cartTotal: cartRef.current, cartCount: cartCountRef.current, flow: flowRef.current });
     setFlow(local.flow || null);
 
@@ -344,9 +392,7 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
       return;
     }
 
-    // Chat-driven flight booking: the slot-filling finished — hit the LIVE Duffel
-    // search endpoint and render real flight cards inline (chat is the primary
-    // booking surface; every points/₹ figure is computed server-side).
+    // Slots filled → live Duffel search, real flight cards inline.
     if (local.action === "flight_search") {
       push({ who: "bot", text: local.reply });
       try {
@@ -381,7 +427,7 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
             ? ` ⚠ Heads-up: ${pax > 1 ? `${pax} tickets` : "this trip"} runs ${fmt(cheapestCost)} pts at the cheapest${cheapest.voucher ? " — even with your voucher applied" : ""}, and you have ${fmt(spendable)} spendable — you're ${fmt(cheapestCost - spendable)} short. Try fewer travellers or another date.`
             : "";
           push({ who: "bot",
-            text: `Here are live options for ${r.origin} → ${r.destination} for ${pax} traveller${pax > 1 ? "s" : ""}, real Duffel fares priced into points.${voucherNote}${shortNote}`,
+            text: `Here are live options for ${r.origin} → ${r.destination} for ${pax} traveller${pax > 1 ? "s" : ""}, real Duffel fares priced into points against your ${fmt(r.available_points)} travel points on ${r.card_name}.${voucherNote}${shortNote}`,
             flights, chips: onOpenTravel ? ["Open full Travel page"] : [] });
         }
       } catch {
@@ -425,9 +471,8 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
     sendText(c);
   }
 
-  /* Book a live flight straight from the chat via the real backend endpoint.
-     Points move server-side (Riya's replayable demo_points bucket); we mirror
-     the spend onto the store header so the visible balance stays consistent. */
+  /* Real Duffel test order (real PNR) on demo credits → order history + invoice.
+     Mirror the spend onto the store header. */
   async function handleBookFlight(offer) {
     if (busy) return;
     // Budget honesty at the moment of commitment: the effective cost (fare
@@ -445,15 +490,18 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
     setBusy(true);
     const mode = "points";
     try {
-      const r = await travelApi.demoConfirm(offer.offer_id, mode);
+      const r = await travelApi.confirm(offer.offer_id, mode);
       if (r.status === "completed") {
         if (offer.voucher) markVoucherUsed(persona.id, offer.voucher.id);
-        if (onSpend) onSpend(effCost);
+        if (onSpend) onSpend(r.points_used ?? effCost);
+        const invoiceNote = r.email_sent
+          ? ` Your invoice is on its way to ${r.email_to}.`
+          : " Your invoice is saved to your order history.";
         push({ who: "bot",
-          text: `✅ Booked! ${offer.airline} ${offer.origin}→${offer.destination}. Demo PNR ${r.booking_reference}. ${offer.voucher
-            ? `Applied your ${offer.voucher.name} (−${fmtPts(offer.voucher.points)}) and redeemed ${fmtPts(effCost)} on top`
-            : `Redeemed ${fmtPts(effCost)}`} — a simulated redemption via live Duffel pricing, no real ticket issued.`,
-          chips: ["Book another flight", "Show me travel options"] });
+          text: `✅ Booked! ${offer.airline} ${offer.origin}→${offer.destination}. PNR ${r.booking_reference}. ${offer.voucher
+            ? `Applied your ${offer.voucher.name} (−${fmtPts(offer.voucher.points)}) and redeemed ${fmtPts(r.points_used ?? effCost)} on top`
+            : `Redeemed ${fmtPts(r.points_used ?? effCost)}`}${r.cash_due_inr ? ` + ₹${fmt(r.cash_due_inr)}` : ""}.${invoiceNote}`,
+          chips: ["My bookings", "Book another flight", "Show me travel options"] });
       } else {
         push({ who: "bot", text: `That booking didn't go through: ${r.rollback_reason || "please try another option"}.`,
           chips: ["Book a flight"] });

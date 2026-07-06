@@ -128,7 +128,7 @@ export function TravelResults({ search, results, loading, error, sort, onSortCha
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 11, color: "var(--ink-3)", fontWeight: 700, textTransform: "uppercase" }}>Available points</div>
           <div className="num" style={{ fontSize: 22, fontWeight: 800, color: "var(--brand-700)" }}>
-            {Number(availablePoints).toLocaleString("en-IN")}
+            {availablePoints == null ? "…" : Number(availablePoints).toLocaleString("en-IN")}
           </div>
         </div>
       </div>

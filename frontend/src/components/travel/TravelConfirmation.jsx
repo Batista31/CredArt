@@ -1,4 +1,4 @@
-/* CredArt — Travel Rewards demo booking confirmation. */
+/* CredArt — Travel Rewards booking confirmation (real Duffel test order). */
 import React from "react";
 import { fmtPts, fmtInr } from "../../lib/travelPoints.js";
 
@@ -16,15 +16,17 @@ export function TravelConfirmation({ theme, confirmation, offer, onDone }) {
       </h2>
       <p style={{ margin: "0 0 20px", color: "var(--ink-2)", fontSize: 13.5 }}>
         {failed
-          ? (confirmation.rollback_reason || "Something went wrong with this simulated redemption.")
-          : "This is a simulated redemption for demo purposes — no real flight was booked."}
+          ? (confirmation.rollback_reason || "Something went wrong with this redemption.")
+          : confirmation.email_sent
+            ? `Your booking is confirmed and saved to your order history. An invoice is on its way to ${confirmation.email_to}.`
+            : "Your booking is confirmed and saved to your order history."}
       </p>
 
       {!failed && (
         <div style={{ background: "#fff", border: "1px solid var(--brand-100)", borderRadius: 16, padding: 22,
           boxShadow: "var(--sh-md)", textAlign: "left" }}>
           <div style={{ fontSize: 12, fontWeight: 800, color: "var(--brand-700)", textTransform: "uppercase", marginBottom: 10 }}>
-            Booking reference (demo PNR)
+            Booking reference (PNR)
           </div>
           <div className="num" style={{ fontSize: 20, fontWeight: 800, letterSpacing: 1, marginBottom: 16 }}>
             {confirmation.booking_reference}
@@ -36,13 +38,13 @@ export function TravelConfirmation({ theme, confirmation, offer, onDone }) {
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, padding: "6px 0",
             borderTop: "1px solid var(--brand-50)" }}>
-            <span style={{ color: "var(--ink-2)" }}>Points deducted (demo)</span>
+            <span style={{ color: "var(--ink-2)" }}>Points deducted</span>
             <span className="num" style={{ fontWeight: 800, color: "var(--brand-700)" }}>{fmtPts(confirmation.points_used)}</span>
           </div>
           {confirmation.cash_due_inr > 0 && (
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, padding: "6px 0",
               borderTop: "1px solid var(--brand-50)" }}>
-              <span style={{ color: "var(--ink-2)" }}>Cash due (demo)</span>
+              <span style={{ color: "var(--ink-2)" }}>Cash due</span>
               <span style={{ fontWeight: 700 }}>{fmtInr(confirmation.cash_due_inr)}</span>
             </div>
           )}
