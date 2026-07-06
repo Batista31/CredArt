@@ -93,3 +93,4 @@ or session state with the bank routes, so it can't break them.
 - **Laptop ⇄ mobile toggle** — a fixed top-right switch. Laptop shows a
   browser-window shell; mobile re-renders the same experience inside a phone frame
   (`IOSDevice`). Every experience takes a `view` prop and fits itself to the frame.
+
