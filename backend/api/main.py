@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from services import (
     bank_mcp_client,
@@ -155,6 +156,39 @@ async def chat(req: ChatRequest):
     session["candidate_index"] = idx
     await store.save(session)
     return resp
+
+
+class ConciergeHistoryRequest(BaseModel):
+    session_id: str
+    persona_id: str
+    messages: list[dict]
+    conversation_id: str | None = None
+
+
+@app.post("/concierge/history")
+async def save_concierge_history(req: ConciergeHistoryRequest):
+    """Store the Rewards Catalogue bubble's transcript in the same Redis-backed
+    session store as the bank /chat flow (in-memory fallback — see session.py).
+    Called automatically (autosave) after every turn; the bubble keeps a local
+    index and reads the transcript back — including conversation_id, so the LLM
+    resumes with full context instead of starting fresh."""
+    session = await store.load(req.session_id)
+    session["concierge_persona_id"] = req.persona_id
+    session["concierge_messages"] = req.messages
+    session["concierge_conversation_id"] = req.conversation_id
+    await store.save(session)
+    return {"status": "saved", "session_id": session["session_id"], "count": len(req.messages)}
+
+
+@app.get("/concierge/history/{session_id}")
+async def get_concierge_history(session_id: str):
+    session = await store.load(session_id)
+    return {
+        "session_id": session["session_id"],
+        "persona_id": session.get("concierge_persona_id"),
+        "conversation_id": session.get("concierge_conversation_id"),
+        "messages": session.get("concierge_messages", []),
+    }
 
 
 @app.post("/redeem", response_model=RedeemResponse)

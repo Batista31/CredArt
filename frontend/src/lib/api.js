@@ -48,6 +48,11 @@ export const api = {
   conversations: (userId = ACTIVE_USER_ID) => jget(`/conversations?user_id=${userId}`),
   conversation: (id, userId = ACTIVE_USER_ID) => jget(`/conversations/${id}?user_id=${userId}`),
 
+  /* Rewards-bubble chat history — Redis-backed via the session store. */
+  saveConciergeHistory: (sessionId, personaId, messages, conversationId) =>
+    jpost("/concierge/history", { session_id: sessionId, persona_id: personaId, messages, conversation_id: conversationId || undefined }),
+  conciergeHistory: (sessionId) => jget(`/concierge/history/${sessionId}`),
+
   redeem: ({ sessionId, candidateId, providerId, mode, consent, userId = ACTIVE_USER_ID }) =>
     jpost("/redeem", {
       user_id: userId, session_id: sessionId, candidate_id: candidateId,

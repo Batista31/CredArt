@@ -451,8 +451,7 @@ export const CAT_PERSONAS = {
        one-tap chip to act (activation strategy a). `expiringSoon` is demo data,
        same as `points`. */
     expiringSoon: 12000,
-    greeting:
-      "Hi Riya! ✈️ You have 84,500 points — and heads up, 12,000 of them expire at the end of this month, so now's a great time to use them. Going by your travel profile I'd lead with the IndiGo Flight Voucher at 32,000 points — perfect for a BLR-GOA getaway before they lapse. Want to book it, or explore other options?",
+    greeting: "Hi Riya! ✈️ You have 84,500 points, and 12,000 expire soon. How can I help?",
     /* CMR fallback — mirrors the seeded backend profile (migration 0012) so the
        checkout can personalize even when the backend is offline. When the
        backend IS up, the live GET /cmr/{user_id} response overrides this. */
@@ -470,8 +469,7 @@ export const CAT_PERSONAS = {
     /* Samyak holds only the entry-tier Millennia — premium-card rewards are
        hidden from his catalogue, chat recommendations, and search. */
     ownedCards: ["hdfc_millennia"],
-    greeting:
-      "Hi Samyak! 🍽️ You have 50,000 points. Based on your dining preferences, the Taj Dining Voucher at 10,000 points would be a great pick — a premium dining experience for two. Interested, or shall I help you find something else?",
+    greeting: "Hi Samyak! 🍽️ You have 50,000 points. How can I help?",
     cmr: {
       addressLabel: "Home",
       address: "221, 100 Feet Road, Indiranagar",
@@ -483,6 +481,112 @@ export const CAT_PERSONAS = {
 };
 
 export const personaFor = (id) => CAT_PERSONAS[id] || CAT_PERSONAS[RIYA];
+
+/* ------------------------------------------------------------------ */
+/* Voucher wallet — rewards redeemed at checkout become USABLE assets.  */
+/* An airline voucher unlocks live Duffel flight booking in chat (its   */
+/* points value is applied to matching fares); a dining voucher unlocks */
+/* food ordering / restaurant booking (its ₹ value is the budget).      */
+/* Persisted per persona in localStorage, marked used after redemption. */
+/* ------------------------------------------------------------------ */
+const VOUCHER_KEY = (pid) => `credart:vouchers:${pid}`;
+
+const AIRLINE_BRANDS = [
+  ["indigo", "IndiGo"], ["spicejet", "SpiceJet"], ["vistara", "Vistara"],
+  ["akasa", "Akasa Air"], ["air india", "Air India"], ["emirates", "Emirates"],
+  ["qatar", "Qatar Airways"], ["singapore airlines", "Singapore Airlines"],
+  ["lufthansa", "Lufthansa"], ["british airways", "British Airways"],
+  ["thai airways", "Thai Airways"], ["airasia", "AirAsia"],
+];
+const DINING_BRANDS = [
+  ["zomato", "Zomato"], ["swiggy", "Swiggy"], ["taj", "Taj"],
+  ["starbucks", "Starbucks"], ["domino", "Domino's"], ["mcdonald", "McDonald's"],
+  ["pizza hut", "Pizza Hut"], ["kfc", "KFC"],
+];
+const brandIn = (name, table) => {
+  const n = (name || "").toLowerCase();
+  for (const [kw, label] of table) if (n.includes(kw)) return label;
+  return null;
+};
+export const airlineOf = (name) => brandIn(name, AIRLINE_BRANDS);
+export const diningBrandOf = (name) => brandIn(name, DINING_BRANDS);
+
+export function ownedVouchers(personaId) {
+  try { return JSON.parse(localStorage.getItem(VOUCHER_KEY(personaId)) || "[]"); } catch { return []; }
+}
+function saveVouchers(personaId, list) {
+  try { localStorage.setItem(VOUCHER_KEY(personaId), JSON.stringify(list.slice(0, 30))); } catch { /* storage off */ }
+}
+
+/* Called by the store's checkout: any airline / dining voucher in the cart
+   lands in the wallet (qty units → that many voucher entries). */
+export function grantVouchersFromCart(personaId, cartItems) {
+  const granted = [];
+  for (const it of cartItems || []) {
+    const airline = it.category === "travel" ? airlineOf(it.name) : null;
+    const dining = it.category === "giftcards" ? diningBrandOf(it.name) : null;
+    if (!airline && !dining) continue;
+    for (let k = 0; k < (it.qty || 1); k++) {
+      granted.push({
+        id: `v${Date.now()}${Math.floor(Math.random() * 1e5)}${k}`,
+        name: it.name, kind: airline ? "flight" : "dining",
+        airline: airline || undefined, brand: dining || undefined,
+        points: it.points, valueInr: it.value || null, usedAt: null,
+      });
+    }
+  }
+  if (granted.length) saveVouchers(personaId, [...granted, ...ownedVouchers(personaId)]);
+  return granted;
+}
+
+export const unusedVouchers = (personaId, kind) =>
+  ownedVouchers(personaId).filter((v) => !v.usedAt && (!kind || v.kind === kind));
+
+export function markVoucherUsed(personaId, voucherId) {
+  saveVouchers(personaId, ownedVouchers(personaId).map((v) =>
+    v.id === voucherId ? { ...v, usedAt: Date.now() } : v));
+}
+
+/* ------------------------------------------------------------------ */
+/* Dynamic lifestyle weighting — the store-side mirror of the bank's    */
+/* update_preferences_after_redemption: every checkout nudges the       */
+/* redeemed categories' weights up (+0.05) and decays the rest, so the  */
+/* SAME vague ask starts leaning wherever the user actually redeems.    */
+/* Seeded from the persona's static lean; persisted per persona.        */
+/* ------------------------------------------------------------------ */
+const WEIGHTS_KEY = (pid) => `credart:weights:${pid}`;
+const LEAN_CATS = ["travel", "giftcards", "cashback", "merchandise"];
+
+export function getLeanWeights(persona) {
+  try {
+    const raw = localStorage.getItem(WEIGHTS_KEY(persona.id));
+    if (raw) return JSON.parse(raw);
+  } catch { /* fall through to seed */ }
+  const seedTop = persona.lean === "travel" ? "travel" : "giftcards";
+  return Object.fromEntries(LEAN_CATS.map((c) => [c, c === seedTop ? 0.5 : 0.5 / 3]));
+}
+
+export function bumpLeanWeights(persona, categories) {
+  const w = getLeanWeights(persona);
+  const hit = [...new Set((categories || []).filter((c) => LEAN_CATS.includes(c)))];
+  if (!hit.length) return w;
+  const delta = 0.05, decay = (delta * hit.length) / (LEAN_CATS.length - hit.length);
+  for (const c of LEAN_CATS) {
+    w[c] = hit.includes(c) ? Math.min(1, w[c] + delta) : Math.max(0, w[c] - decay);
+  }
+  try { localStorage.setItem(WEIGHTS_KEY(persona.id), JSON.stringify(w)); } catch { /* storage off */ }
+  return w;
+}
+
+/* Dominant lean under the same thresholds as the bank's _dominant_lean
+   (floor 0.35 + margin 0.15 over the runner-up) — a flat profile has none. */
+export function dominantLean(persona) {
+  const w = getLeanWeights(persona);
+  const ranked = LEAN_CATS.map((c) => [c, w[c]]).sort((a, b) => b[1] - a[1]);
+  const [topCat, topW] = ranked[0];
+  if (topW >= 0.35 && topW - ranked[1][1] >= 0.15) return topCat;
+  return persona.lean === "travel" ? "travel" : "giftcards"; // seeded fallback
+}
 
 /* ------------------------------------------------------------------ */
 /* Card-mapped rewards — a reward tied to a card tier only shows for    */
@@ -568,13 +672,22 @@ function budgetNote(items, budget) {
   return ` Heads-up: ${over.map((o) => o.name).join(" and ")} sit beyond your spendable points right now, so I've marked them.`;
 }
 
-/* Category-lean recommendations for the personalization-forward opener. */
+/* Category-lean recommendations for the personalization-forward opener.
+   Driven by the DYNAMIC lifestyle weights (bumped on every checkout), so a
+   dining-leaning user who keeps redeeming travel drifts toward travel — the
+   store-side mirror of the bank's dynamic preference learning. */
+const LEAN_META = {
+  travel:      { emoji: "✈️", word: "travel", ids: ["tv-indigo", "tv-marriott", "tv-lounge"],
+                 switchChips: ["Gift cards instead", "Cashback instead", "What's in merchandise?"] },
+  giftcards:   { emoji: "🍽️", word: "dining & gift cards", ids: ["gc-taj", "gc-zomato", "gc-swiggy"],
+                 switchChips: ["Show me travel options", "Cashback instead", "What's in merchandise?"] },
+  cashback:    { emoji: "💸", word: "cashback", ids: ["cb-10000", "cb-5000", "cb-2500"],
+                 switchChips: ["Show me travel options", "Gift cards instead", "What's in merchandise?"] },
+  merchandise: { emoji: "🛍️", word: "merchandise", ids: ["md-sony", "md-airpods", "md-airfryer"],
+                 switchChips: ["Show me travel options", "Gift cards instead", "Cashback instead"] },
+};
 function leanRecs(persona) {
-  return persona.lean === "travel"
-    ? { emoji: "✈️", word: "travel", ids: ["tv-indigo", "tv-marriott", "tv-lounge"],
-        switchChips: ["Gift cards instead", "Cashback instead", "What's in merchandise?"] }
-    : { emoji: "🍽️", word: "dining", ids: ["gc-taj", "gc-zomato", "gc-swiggy"],
-        switchChips: ["Show me travel options", "Cashback instead", "What's in merchandise?"] };
+  return LEAN_META[dominantLean(persona)] || LEAN_META.travel;
 }
 
 /* Specific-product search over the merchandise catalogue, so "a camera" surfaces
@@ -602,13 +715,113 @@ function findProducts(t, budget, n = 3) {
   return { words, items: orderByBudget(matches, budget).slice(0, n) };
 }
 
+/* ------------------------------------------------------------------ */
+/* Full-catalogue intent search — every one of the 200+ rewards in          */
+/* ALL_ITEMS is reachable, not just the handful of curated ids referenced   */
+/* by name in the blocks below. Each reward's "intent" is derived           */
+/* automatically from its category, its topical keyword (imageKeyword       */
+/* already classifies every item for photos), and its own name — so "noise  */
+/* cancelling headphones" or "a Bali honeymoon" surfaces the ACTUAL         */
+/* matching reward even though no code path hardcoded that id. Keeping the  */
+/* matched word lets CredArt explain WHY a pick surfaced, deterministically */
+/* — never guessed. Card visibility (premium-card gating) is enforced when  */
+/* a persona is passed.                                                     */
+/* ------------------------------------------------------------------ */
+const STOPWORDS = new Set([
+  "the", "a", "an", "for", "with", "of", "to", "and", "in", "on", "my", "your",
+  "me", "want", "need", "get", "some", "best", "good", "please", "can",
+  "points", "point", "pts", "reward", "rewards", "spend", "use", "buy",
+]);
+function tokenize(t) {
+  return (t || "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !STOPWORDS.has(w));
+}
+function itemTags(item) {
+  return [item.category, imageKeyword(item.name, item.category), ...tokenize(item.name)];
+}
+
+/* Scores every reward (optionally scoped to one category, gated to the
+   persona's cards) against the user's words. Returns [{ item, score,
+   matched }], best first. */
+export function searchCatalogue(text, { category = null, persona = null, limit = 4 } = {}) {
+  const tokens = tokenize(text);
+  if (!tokens.length) return [];
+  let pool = category ? ALL_ITEMS.filter((i) => i.category === category) : ALL_ITEMS;
+  if (persona) pool = pool.filter((i) => visibleTo(i, persona));
+  const scored = [];
+  for (const item of pool) {
+    const tags = itemTags(item);
+    let score = 0, matched = null;
+    for (const tok of tokens) {
+      if (tags.includes(tok)) { score += 3; matched = matched || tok; }
+      else if (tags.some((tag) => tag.length > 2 && (tag.includes(tok) || tok.includes(tag)))) {
+        score += 1; matched = matched || tok;
+      }
+    }
+    if (score > 0) scored.push({ item, score, matched });
+  }
+  scored.sort((a, b) => b.score - a.score || a.item.points - b.item.points);
+  return scored.slice(0, limit);
+}
+
+/* Deterministic ONE-LINE "why this was recommended" explanation — never
+   LLM-generated, so it's always literally true: what matched, the rupee
+   value ratio if relevant, and where it stands against spendable budget. */
+export function whyPick(item, budget, matched) {
+  const bits = [];
+  if (matched) bits.push(`matches "${matched}"`);
+  if (item.value) bits.push(`${Math.round((item.value / item.points) * 100)}% value-per-point`);
+  bits.push(item.points <= budget ? "within your spendable points" : `${fmt(item.points - budget)} pts over budget`);
+  return bits.join(" · ");
+}
+
+/* Menu for the voucher-gated food-ordering journey — fixed prices so budget
+   honesty against the voucher's ₹ value is deterministic. Each dish carries a
+   cuisine tag so the conversation can suggest one from what the user said
+   they're craving, instead of dumping the whole menu immediately. */
+const FOOD_MENU = [
+  { key: "pizza", name: "Margherita Pizza", price: 450, cuisine: "italian" },
+  { key: "biryani", name: "Hyderabadi Biryani", price: 380, cuisine: "hyderabadi" },
+  { key: "sub", name: "Footlong Sub Combo", price: 350, cuisine: "american" },
+  { key: "burger", name: "Classic Burger Meal", price: 320, cuisine: "american" },
+  { key: "thali", name: "North Indian Thali", price: 300, cuisine: "north indian" },
+  { key: "dessert", name: "Coffee & Dessert", price: 250, cuisine: "dessert" },
+];
+const CUISINE_CHIPS = ["North Indian", "Italian", "American", "Something light", "Surprise me"];
+function _cuisineToDish(t) {
+  if (has(t, "north indian", "punjabi", "thali", "roti", "curry")) return FOOD_MENU.find((m) => m.key === "thali");
+  if (has(t, "italian", "pizza")) return FOOD_MENU.find((m) => m.key === "pizza");
+  if (has(t, "hyderabadi", "biryani")) return FOOD_MENU.find((m) => m.key === "biryani");
+  if (has(t, "american", "burger", "sub", "sandwich")) return FOOD_MENU.find((m) => m.key === "burger");
+  if (has(t, "light", "dessert", "sweet", "snack")) return FOOD_MENU.find((m) => m.key === "dessert");
+  return null; // "surprise me" or anything unmatched — let the item step ask directly
+}
+
+/* A meal ask ("actually, book me dinner instead") — its own signal so BOTH
+   the flight and food journeys can detect a pivot INTO the other. */
+function wantsFoodSwitch(t) {
+  return /\b(dinner|lunch|breakfast|brunch|restaurant|table|meal)\b/.test(t)
+    && has(t, "book", "order", "reserve", "get me", "want", "craving", "plan", "arrange", "set up", "make");
+}
+
 /* Signals that clearly belong to a DIFFERENT intent than trip-planning — a
-   product, a gift card, cashback, etc. A bare destination correction ("actually
-   Dubai") deliberately does NOT match, so it stays in the trip flow. */
+   product, a gift card, cashback, food, etc. A bare destination correction
+   ("actually Dubai") deliberately does NOT match, so it stays in the trip flow. */
 function switchesAwayFromTrip(t) {
   return productWordsIn(t).length > 0
+    || wantsFoodSwitch(t)
     || has(t, "gift card", "gift cards", "voucher", "cashback", "cash back",
             "statement credit", "merchandise", "electronics", "gadget", "appliance");
+}
+
+/* Same idea for the food-ordering journey — a clear pivot to flights, a
+   product, gift cards, etc. bails out instead of being misread as a cuisine,
+   party size, or dish. */
+function switchesAwayFromFood(t) {
+  return productWordsIn(t).length > 0
+    || has(t, "gift card", "gift cards", "voucher", "cashback", "cash back",
+            "statement credit", "merchandise", "electronics", "gadget", "appliance",
+            "book a flight", "book flight", "fly to", "flights to", "flight ticket",
+            "want to fly", "book a trip", "planning a trip", "travel", "vacation", "holiday", "hotel");
 }
 
 /* ---- FLIGHT booking flow helpers (real Duffel via the backend) ------------
@@ -753,15 +966,17 @@ export function runConcierge(rawMessage, ctx) {
 
   /* Activation strategy (b): when a leaning persona browses a lane that ISN'T
      their strength, gently point them to where their points go further — WITHOUT
-     blocking the browse (their requested items are still shown and returned). The
-     dining lane in this store is the gift-cards category (Taj/Zomato/Swiggy). */
-  const leanLaneKey = persona.lean === "travel" ? "travel" : "giftcards";
+     blocking the browse (their requested items are still shown and returned).
+     The lean comes from the DYNAMIC weights (updated on every checkout). */
+  const leanLaneKey = dominantLean(persona);
   const laneNudge = (browsedKey) => {
     if (browsedKey === leanLaneKey) return { text: "", chip: null };
-    const word = persona.lean === "travel" ? "travel" : "dining";
-    const chip = persona.lean === "travel" ? "Show me travel options" : "Show dining options";
+    const meta = LEAN_META[leanLaneKey] || LEAN_META.travel;
+    const chip = leanLaneKey === "travel" ? "Show me travel options"
+      : leanLaneKey === "giftcards" ? "Show dining options"
+      : leanLaneKey === "cashback" ? "Cashback instead" : "What's in merchandise?";
     return {
-      text: ` By the way, your points tend to go further on ${word} — want me to show those instead? No rush, keep browsing here too.`,
+      text: ` By the way, your points tend to go further on ${meta.word} — want me to show those instead? No rush, keep browsing here too.`,
       chip,
     };
   };
@@ -899,6 +1114,109 @@ export function runConcierge(rawMessage, ctx) {
     }
   }
 
+  /* ---------- active journey: FOOD ordering / table booking (conversational) --
+     One question at a time — cuisine → party size → suggested dish → confirm
+     — same character as the flight flow above. The dining-voucher requirement
+     and budget honesty (against the voucher's ₹ value) are only checked at the
+     CONFIRM step, so CredArt talks through the whole plan first instead of
+     stonewalling the ask with "you need a voucher" as the very first reply. */
+  if (flow && flow.journey === "food" && !switchesAwayFromFood(t)) {
+    const d = flow.data || {};
+
+    if (flow.slot === "cuisine") {
+      const dish = _cuisineToDish(t);
+      return {
+        reply: "Got it. How many people is this for?",
+        items: [], chips: ["Just me", "2", "3", "4"],
+        flow: { journey: "food", slot: "party", data: { ...d, cuisine: rawMessage.trim(), suggestedKey: dish ? dish.key : null } },
+      };
+    }
+
+    if (flow.slot === "party") {
+      const party = has(t, "just me", "solo", "only me", "myself") ? 1
+        : Math.max(1, Math.min(12, parseInt((t.match(/\d+/) || ["1"])[0], 10)));
+      const suggested = FOOD_MENU.find((m) => m.key === d.suggestedKey);
+      if (suggested) {
+        const total = suggested.price * party;
+        return {
+          reply: `For ${party}, I'd suggest the ${suggested.name} — ₹${suggested.price} each, ₹${total.toLocaleString("en-IN")} total. Shall I place the order?`,
+          items: [], chips: ["Yes, order it", "Show other options"],
+          flow: { journey: "food", slot: "confirm", data: { ...d, party, item: suggested } },
+        };
+      }
+      return {
+        reply: "Here's the menu — what would you like?",
+        items: [], chips: FOOD_MENU.map((m) => m.name),
+        flow: { journey: "food", slot: "item", data: { ...d, party } },
+      };
+    }
+
+    if (flow.slot === "item") {
+      const pick = FOOD_MENU.find((m) => t.includes(m.key) || t.includes(m.name.toLowerCase()));
+      if (!pick) {
+        return { reply: "Pick something from the menu and I'll confirm it with you:",
+          items: [], chips: FOOD_MENU.map((m) => m.name),
+          flow: { journey: "food", slot: "item", data: d } };
+      }
+      const total = pick.price * (d.party || 1);
+      return {
+        reply: `${pick.name} for ${d.party || 1} — ₹${pick.price} each, ₹${total.toLocaleString("en-IN")} total. Shall I place the order?`,
+        items: [], chips: ["Yes, order it", "Show other options"],
+        flow: { journey: "food", slot: "confirm", data: { ...d, item: pick } },
+      };
+    }
+
+    if (flow.slot === "confirm") {
+      if (has(t, "other option", "show other", "something else", "change", "different")) {
+        return {
+          reply: "No problem — here's the full menu:",
+          items: [], chips: FOOD_MENU.map((m) => m.name),
+          flow: { journey: "food", slot: "item", data: d },
+        };
+      }
+      // Require an explicit yes — anything ambiguous re-asks instead of
+      // silently placing the order (a stray reply should never book food).
+      const saysYes = has(t, "yes", "order it", "place it", "confirm", "go ahead", "do it", "sounds good", "perfect", "sure", "ok", "okay");
+      if (!saysYes) {
+        const qty = d.party || 1;
+        return {
+          reply: `Just to confirm — ${qty} × ${d.item.name} for ₹${(d.item.price * qty).toLocaleString("en-IN")}. Shall I place the order?`,
+          items: [], chips: ["Yes, order it", "Show other options"],
+          flow: { journey: "food", slot: "confirm", data: d },
+        };
+      }
+      // Confirming is where the dining-voucher requirement and budget honesty
+      // (against the voucher's ₹ value) come in — the plan is already agreed,
+      // now CredArt sorts out how to pay for it, exactly like a real concierge.
+      const dining = unusedVouchers(persona.id, "dining");
+      const qty = d.party || 1;
+      const total = d.item.price * qty;
+      if (!dining.length) {
+        return {
+          reply: `Everything's set — ${qty} × ${d.item.name} (₹${total.toLocaleString("en-IN")}). I just need a dining voucher to redeem it against — grab one here and say “yes, order it” again and I'll finish up:`,
+          items: orderByBudget(vis([itemById("gc-zomato"), itemById("gc-swiggy"), itemById("gc-taj")]), budget),
+          chips: ["Show dining options"],
+          flow: { journey: "food", slot: "confirm", data: d },
+        };
+      }
+      const voucher = dining[0];
+      const cap = voucher.valueInr || Math.round(voucher.points / 4);
+      if (total > cap) {
+        return {
+          reply: `Heads-up before you commit: ${qty} × ${d.item.name} comes to ₹${total.toLocaleString("en-IN")}, but your ${voucher.name} covers ₹${cap.toLocaleString("en-IN")} — you're ₹${(total - cap).toLocaleString("en-IN")} short. Fewer people, or something lighter?`,
+          items: [], chips: ["Just me", ...FOOD_MENU.filter((m) => m.price * qty <= cap).slice(0, 2).map((m) => m.name)],
+          flow: { journey: "food", slot: "party", data: d },
+        };
+      }
+      markVoucherUsed(persona.id, voucher.id);
+      const code = `TNG-${Math.random().toString(36).slice(2, 6).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+      return {
+        reply: `✅ Order placed with your ${voucher.name}: ${qty} × ${d.item.name} (₹${total.toLocaleString("en-IN")} of ₹${cap.toLocaleString("en-IN")} covered). Your redemption code is ${code} — issued the same way the bank world issues Tango vouchers. Enjoy! 🍽️`,
+        items: [], chips: ["Show dining options", "Best value for my points"], flow: null,
+      };
+    }
+  }
+
   /* ---------- "tell me more" about the proactive pick ---------- */
   if (has(t, "tell me more", "more about", "know more", "the pick", "your suggestion") ||
       (t === "yes" || t === "yes please" || t === "sure")) {
@@ -979,13 +1297,37 @@ export function runConcierge(rawMessage, ctx) {
     };
   }
 
+  /* ---------- start FOOD ordering / restaurant booking (conversational) -------
+     Natural asks like "book me a nice dinner" open a real one-question-at-a-
+     time conversation — cuisine → party size → suggested dish → confirm —
+     mirroring the bank world's dining slot-filling. The dining-voucher check
+     happens at the END (like a real concierge sorting out payment last), not
+     as a hard gate before CredArt will even talk to you. */
+  const foodMealWord = /\b(dinner|lunch|breakfast|brunch|restaurant|table|meal)\b/.test(t);
+  const foodVerb = has(t, "book", "order", "reserve", "get me", "want", "craving", "plan", "arrange", "set up", "make");
+  const wantsFood = has(t, "order food", "order some food", "book a restaurant", "book restaurant",
+         "reserve a table", "book a table", "table for", "order dinner", "order lunch",
+         "order a pizza", "order pizza", "order a meal", "use my dining voucher",
+         "food order", "get me food", "hungry")
+      || (foodMealWord && foodVerb);
+  if (wantsFood) {
+    return {
+      reply: "Happy to sort that out! What are you in the mood for?",
+      items: [], chips: CUISINE_CHIPS,
+      flow: { journey: "food", slot: "cuisine", data: {} },
+    };
+  }
+
   /* ---------- category browses (budget-ordered + flagged; off-lean browses get
      a gentle redirect nudge that never blocks the browse — strategy (b)) ---------- */
   if (has(t, "travel", "flight", "trip", "getaway", "vacation", "holiday", "hotel", "stay", "lounge")) {
-    const items = orderByBudget(vis([itemById("tv-indigo"), itemById("tv-marriott"), itemById("tv-itc")]), budget);
+    const found = searchCatalogue(t, { category: "travel", persona });
+    const items = orderByBudget(found.length ? found.map((f) => f.item)
+      : vis([itemById("tv-indigo"), itemById("tv-marriott"), itemById("tv-itc")]), budget);
     const nudge = laneNudge("travel");
+    const why = found.length && items[0] ? ` I led with the ${items[0].name} because it ${whyPick(items[0], budget, found[0].matched)}.` : "";
     return {
-      reply: `Here are your top travel redemptions — I've led with the ones that fit your ${fmt(budget)} spendable points:${budgetNote(items, budget)}${nudge.text}`,
+      reply: `Here are your top travel redemptions — I've led with the ones that fit your ${fmt(budget)} spendable points:${budgetNote(items, budget)}${why}${nudge.text}`,
       items, chips: withNudge(["I'm planning a trip", "Best value for my points"], nudge), flow: null,
     };
   }
@@ -1000,24 +1342,33 @@ export function runConcierge(rawMessage, ctx) {
       : found
         ? `The ${found.words[0]} options in the catalogue need a premium card your account doesn't hold — here's what your cards CAN redeem instead:`
         : `Popular merchandise picks — real products, priced in points:`;
+    const why = foundItems.length && items[0]
+      ? ` I led with the ${items[0].name} because it matches "${found.words[0]}" and is ${items[0].points <= budget ? "within your spendable points" : `${fmt(items[0].points - budget)} pts over budget`}.`
+      : "";
     return {
-      reply: `${lead}${budgetNote(items, budget)}${nudge.text}`,
+      reply: `${lead}${budgetNote(items, budget)}${why}${nudge.text}`,
       items, chips: withNudge(["Best value for my points", "Show me travel options"], nudge), flow: null,
     };
   }
   if (has(t, "gift card", "gift cards", "voucher", "amazon", "flipkart", "zomato", "swiggy", "myntra", "dining", "food")) {
-    const items = orderByBudget(vis([itemById("gc-taj"), itemById("gc-amazon"), itemById("gc-zomato")]), budget);
+    const found = searchCatalogue(t, { category: "giftcards", persona });
+    const items = orderByBudget(found.length ? found.map((f) => f.item)
+      : vis([itemById("gc-taj"), itemById("gc-amazon"), itemById("gc-zomato")]), budget);
     const nudge = laneNudge("giftcards");
+    const why = found.length && items[0] ? ` I led with the ${items[0].name} because it ${whyPick(items[0], budget, found[0].matched)}.` : "";
     return {
-      reply: `Instant e-vouchers, straight to your inbox:${budgetNote(items, budget)}${nudge.text}`,
+      reply: `Instant e-vouchers, straight to your inbox:${budgetNote(items, budget)}${why}${nudge.text}`,
       items, chips: withNudge(["Best value for my points", "What's in merchandise?"], nudge), flow: null,
     };
   }
   if (has(t, "cashback", "cash back", "statement credit", "money back")) {
-    const items = orderByBudget(vis([itemById("cb-10000"), itemById("cb-5000"), itemById("cb-2500")]), budget);
+    const found = searchCatalogue(t, { category: "cashback", persona });
+    const items = orderByBudget(found.length ? found.map((f) => f.item)
+      : vis([itemById("cb-10000"), itemById("cb-5000"), itemById("cb-2500")]), budget);
     const nudge = laneNudge("cashback");
+    const why = found.length && items[0] ? ` I led with the ${items[0].name} because it ${whyPick(items[0], budget, found[0].matched)}.` : "";
     return {
-      reply: `Prefer cash? These credit straight to your account — higher tiers give a little more per point:${budgetNote(items, budget)}${nudge.text}`,
+      reply: `Prefer cash? These credit straight to your account — higher tiers give a little more per point:${budgetNote(items, budget)}${why}${nudge.text}`,
       items, chips: withNudge(["Best value for my points", "Show me travel options"], nudge), flow: null,
     };
   }
@@ -1042,8 +1393,9 @@ export function runConcierge(rawMessage, ctx) {
   if (/spend|use (my )?points|what should i|suggest|recommend|ideas|help me|not sure|surprise me|best way|best value|value for my points|most value|worth it|worthwhile/.test(t)) {
     const lean = leanRecs(persona);
     const items = orderByBudget(vis(lean.ids.map(itemById)), budget);
+    const why = items[0] ? ` I led with the ${items[0].name} because it's your top ${lean.word} pick and fits your budget.` : "";
     return {
-      reply: `Since your profile leans toward ${lean.word} ${lean.emoji}, I started there — these fit your ${fmt(budget)} spendable points:${budgetNote(items, budget)} Want a different lane? Just tap below.`,
+      reply: `Since your profile leans toward ${lean.word} ${lean.emoji}, I started there — these fit your ${fmt(budget)} spendable points:${budgetNote(items, budget)}${why} Want a different lane? Just tap below.`,
       items,
       chips: lean.switchChips,
       flow: null,
@@ -1057,6 +1409,25 @@ export function runConcierge(rawMessage, ctx) {
         ? `You have ${fmt(balance)} points, with ${fmt(cartTotal)} pts reserved in your cart — so ${fmt(budget)} pts spendable right now. Want me to find the smartest way to use them?`
         : `You currently have ${fmt(balance)} points to spend. Want me to find the smartest way to use them?`,
       items: [], chips: ["Best value for my points", "Show me travel options", "What's in merchandise?"], flow: null,
+    };
+  }
+
+  /* ---------- catch-all catalogue search: ANY reward, ANY category ----------
+     Covers free text that didn't hit one of the category blocks above (e.g.
+     "noise cancelling headphones", "a Bali honeymoon") by searching every one
+     of the 200+ rewards in ALL_ITEMS by name / category / topical-keyword,
+     then explaining WHY the top pick surfaced — derived from the actual match
+     + the user's real spendable budget, never invented. ---------- */
+  const globalFound = searchCatalogue(t, { persona });
+  if (globalFound.length) {
+    const items = orderByBudget(globalFound.map((f) => f.item), budget);
+    const top = items[0];
+    const matched = (globalFound.find((f) => f.item.id === top.id) || {}).matched;
+    return {
+      reply: `Here's what I found for "${rawMessage.trim()}":${budgetNote(items, budget)} I led with the ${top.name} because it ${whyPick(top, budget, matched)}.`,
+      items,
+      chips: ["Best value for my points", "Show me travel options", "What's in merchandise?"],
+      flow: null,
     };
   }
 

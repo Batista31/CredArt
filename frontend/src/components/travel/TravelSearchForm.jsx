@@ -1,9 +1,12 @@
 /* CredArt — Travel Rewards search form (Flights tab) + tab bar + promo strip.
- * Hotels/Cars/Packages are polished "coming soon" placeholders — they visually
- * exist (per the Kobie/Navy-Federal reference portal's tab layout) but don't
- * search yet. */
+ * Hotels/Cars/Packages tabs redeem real catalogue rewards (same items, points
+ * and images as the Rewards Catalogue store) — reserving debits real points
+ * and is budget-gated, same as every other redemption surface in the app. */
 import React from "react";
 import { travelApi } from "../../lib/travelApi.js";
+import { CATALOGUE, visualFor, onImgError, rewardImgStyle } from "../../lib/catalogue.js";
+
+const fmtN = (n) => Number(n).toLocaleString("en-IN");
 
 const TABS = [
   { key: "flights", label: "Flights", emoji: "✈️" },
@@ -90,25 +93,77 @@ function PromoCard({ icon, title, children }) {
   );
 }
 
-function ComingSoon({ label, emoji }) {
+/* Curated non-flight travel rewards (hotels / cars / packages), pulled from the
+   same hardcoded catalogue the store uses — so every name and points figure is
+   real and identical across surfaces. */
+const EXTRA_MATCH = {
+  hotels: ["hotel", "stay", "night", "resort", "suite"],
+  cars: ["rental", "zoomcar", "cab", "self-drive"],
+  packages: ["package", "cruise", "tour", "getaway", "balloon"],
+};
+function extrasFor(tabKey) {
+  const all = CATALOGUE.travel.map((it) => ({ ...it, category: "travel", ...visualFor({ ...it, category: "travel" }) }));
+  const words = EXTRA_MATCH[tabKey] || [];
+  return all.filter((i) => words.some((w) => i.name.toLowerCase().includes(w))).slice(0, 8);
+}
+
+/* One reward card — reserving debits real points off the visible balance
+   (budget-gated) and persists via the parent's reserved/onReserve props. */
+function ExtraCard({ item, availablePoints, reservedRef, onReserve }) {
+  const over = availablePoints != null && item.points > availablePoints;
   return (
-    <div style={{ background: "#fff", border: "1px dashed var(--brand-200)", borderRadius: 16, padding: "40px 24px",
-      textAlign: "center" }}>
-      <div style={{ fontSize: 34, marginBottom: 10 }}>{emoji}</div>
-      <div style={{ fontSize: 16, fontWeight: 800, color: "var(--brand-800)", marginBottom: 6 }}>{label}</div>
-      <div style={{ fontSize: 13, color: "var(--ink-2)", maxWidth: 380, margin: "0 auto 16px", lineHeight: 1.55 }}>
-        Coming soon in this demo — redeem points for {label.toLowerCase()} the same way you already redeem for flights.
+    <div style={{ background: "#fff", borderRadius: 14, border: "1px solid var(--brand-100)", overflow: "hidden",
+      display: "flex", flexDirection: "column", boxShadow: "var(--sh-sm)" }}>
+      <div style={{ position: "relative", height: 100, background: "var(--brand-50)" }}>
+        <img src={item.image} alt={item.name} loading="lazy" onError={onImgError(item)}
+          style={{ width: "100%", height: "100%", ...rewardImgStyle(item) }} />
+        {over && !reservedRef && (
+          <span style={{ position: "absolute", top: 8, left: 8, fontSize: 9.5, fontWeight: 800, color: "var(--amber)",
+            background: "#fff", border: "1px solid rgba(242,162,59,0.5)", padding: "2px 8px", borderRadius: 999 }}>
+            ⚠ {fmtN(item.points - availablePoints)} pts short
+          </span>
+        )}
       </div>
-      <button disabled className="tap" style={{ padding: "10px 20px", borderRadius: 999, border: "1.5px solid var(--brand-200)",
-        background: "var(--brand-50)", color: "var(--brand-400)", fontFamily: "var(--font)", fontWeight: 800,
-        fontSize: 13, cursor: "not-allowed" }}>
-        Search {label} — coming soon
-      </button>
+      <div style={{ padding: "10px 12px 12px", display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--brand-800)", lineHeight: 1.3, flex: 1 }}>{item.name}</div>
+        <div className="num" style={{ fontSize: 12, fontWeight: 800, color: "var(--brand-600)" }}>{fmtN(item.points)} pts</div>
+        {reservedRef ? (
+          <div style={{ fontSize: 11, fontWeight: 800, color: "var(--green)" }}>✓ Reserved · {reservedRef}</div>
+        ) : (
+          <button className="tap" disabled={over}
+            onClick={() => onReserve(item)}
+            title={over ? `You need ${fmtN(item.points - availablePoints)} more points` : "Reserve this reward"}
+            style={{ padding: "7px 12px", borderRadius: 999, border: "none", fontFamily: "var(--font)", fontWeight: 800,
+              fontSize: 11.5, cursor: over ? "not-allowed" : "pointer",
+              color: over ? "var(--ink-3)" : "#fff",
+              background: over ? "rgba(8,28,51,0.06)" : "linear-gradient(135deg,var(--brand-600),var(--brand-800))" }}>
+            {over ? "Over budget" : "Reserve"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
 
-export function TravelSearchForm({ theme, availablePoints, onSearch, error }) {
+function ExtrasGrid({ tabKey, label, emoji, availablePoints, reserved, onReserve }) {
+  const items = extrasFor(tabKey);
+  if (!items.length) return null;
+  return (
+    <div>
+      <p style={{ margin: "0 0 16px", color: "var(--ink-2)", fontSize: 13 }}>
+        {emoji} Real {label.toLowerCase()} rewards from the catalogue — same points, same budget honesty as flights.
+      </p>
+      <div style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))" }}>
+        {items.map((it) => (
+          <ExtraCard key={it.id} item={it} availablePoints={availablePoints}
+            reservedRef={reserved[it.id]} onReserve={onReserve} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function TravelSearchForm({ theme, availablePoints, onSearch, error, reserved = {}, onReserve }) {
   const [tab, setTab] = React.useState("flights");
   const [tripType, setTripType] = React.useState("round_trip");
   const [origin, setOrigin] = React.useState(null);
@@ -167,7 +222,8 @@ export function TravelSearchForm({ theme, availablePoints, onSearch, error }) {
 
         <div style={{ padding: "22px 22px 24px" }}>
           {tab !== "flights" ? (
-            <ComingSoon label={TABS.find((t) => t.key === tab).label} emoji={TABS.find((t) => t.key === tab).emoji} />
+            <ExtrasGrid tabKey={tab} label={TABS.find((t) => t.key === tab).label} emoji={TABS.find((t) => t.key === tab).emoji}
+              availablePoints={availablePoints} reserved={reserved} onReserve={onReserve} />
           ) : (
             <form onSubmit={submit}>
               {/* trip type */}
