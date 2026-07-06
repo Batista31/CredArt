@@ -36,6 +36,8 @@ export function TravelPage({ theme, onExit }) {
   const [confirmError, setConfirmError] = React.useState("");
   const [confirmation, setConfirmation] = React.useState(null);
   const [askSignal, setAskSignal] = React.useState(null);
+  const [showOrders, setShowOrders] = React.useState(false);
+  const [orders, setOrders] = React.useState(null); // null = loading
 
   React.useEffect(() => {
     travelApi.health().then((h) => {
@@ -80,16 +82,18 @@ export function TravelPage({ theme, onExit }) {
     setConfirming(true);
     setConfirmError("");
     try {
-      const r = await travelApi.demoConfirm(selectedOffer.offer_id, paymentMode);
+      // LIVE path: real Duffel test order, demo credits debited, order recorded
+      // to account history, invoice emailed.
+      const r = await travelApi.confirm(selectedOffer.offer_id, paymentMode);
       if (r.status !== "completed") {
-        setConfirmError(r.rollback_reason || "The demo booking couldn't be completed.");
+        setConfirmError(r.rollback_reason || "The booking couldn't be completed.");
         return;
       }
       setConfirmation(r);
       setAvailablePoints(r.balance_after);
       setView("confirmation");
     } catch (e) {
-      setConfirmError(e.message || "The demo booking couldn't be completed.");
+      setConfirmError(e.message || "The booking couldn't be completed.");
     } finally {
       setConfirming(false);
     }
@@ -103,13 +107,22 @@ export function TravelPage({ theme, onExit }) {
     setResults([]);
   }
 
+  function toggleOrders() {
+    const next = !showOrders;
+    setShowOrders(next);
+    if (next) {
+      setOrders(null);
+      travelApi.orders().then(setOrders).catch(() => setOrders([]));
+    }
+  }
+
   const aiContext = {
     availablePoints, origin: search?.origin, destination: search?.destination,
     tripType: search?.trip_type, results, selectedOffer, view,
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
+    <div className="no-sb" style={{ height: "100%", overflowY: "auto", background: "var(--bg)" }}>
       {/* header — matches the rest of the app's rewards nav */}
       <div style={{ background: "#fff", borderBottom: "1px solid var(--brand-100)", padding: "12px 24px",
         display: "flex", alignItems: "center", gap: 12, position: "sticky", top: 0, zIndex: 10,
@@ -128,6 +141,13 @@ export function TravelPage({ theme, onExit }) {
           <div style={{ fontSize: 10, fontWeight: 700, color: "var(--brand-400)", fontStyle: "italic" }}>Powered by CredArt</div>
         </div>
         <div style={{ flex: 1 }} />
+        <button className="tap" onClick={toggleOrders} style={{ display: "inline-flex", alignItems: "center", gap: 6,
+          background: showOrders ? "var(--brand-100)" : "#fff", border: "1.5px solid var(--brand-200)", borderRadius: 999,
+          padding: "8px 14px", cursor: "pointer", fontFamily: "var(--font)", fontWeight: 800, fontSize: 12.5,
+          color: "var(--brand-700)" }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 4h14v16l-3-2-2 2-2-2-2 2-2-2-3 2V4z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" /><path d="M9 9h6M9 13h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+          My bookings
+        </button>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ink-3)", textTransform: "uppercase" }}>Riya · {cardName || "HDFC"}</div>
           <div className="num" style={{ fontSize: 15, fontWeight: 800, color: healthError ? "#B23A3A" : "var(--brand-700)" }}>
@@ -135,6 +155,38 @@ export function TravelPage({ theme, onExit }) {
           </div>
         </div>
       </div>
+
+      {/* account order history — real redemption_history rows via /travel/orders */}
+      {showOrders && (
+        <div style={{ maxWidth: 1080, margin: "18px auto -8px", padding: "0 24px" }}>
+          <div style={{ background: "#fff", border: "1px solid var(--brand-100)", borderRadius: 16, boxShadow: "var(--sh-md)",
+            padding: "16px 20px", animation: "sheetUp .2s ease" }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "var(--brand-700)", textTransform: "uppercase", marginBottom: 10 }}>
+              My bookings
+            </div>
+            {orders == null ? (
+              <div style={{ padding: "14px 4px", fontSize: 13, color: "var(--ink-3)" }}>Loading your bookings…</div>
+            ) : orders.length === 0 ? (
+              <div style={{ padding: "14px 4px", fontSize: 13, color: "var(--ink-3)" }}>No bookings yet — search a flight above to get started.</div>
+            ) : orders.map((o) => (
+              <div key={o.transaction_id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 2px",
+                borderTop: "1px solid var(--brand-50)", fontSize: 13.5 }}>
+                <span style={{ fontSize: 15 }}>{o.status === "completed" ? "✅" : "✖"}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.label}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--ink-3)" }}>
+                    {o.status === "completed" ? `PNR ${o.booking_reference}` : (o.rollback_reason || "failed")}
+                    {o.created_at ? ` · ${new Date(o.created_at).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}
+                  </div>
+                </div>
+                <span className="num" style={{ fontWeight: 800, color: "var(--brand-700)", flexShrink: 0 }}>
+                  {Number(o.points_used).toLocaleString("en-IN")} pts
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ maxWidth: 1080, margin: "0 auto", padding: "26px 24px 90px" }}>
         {view === "search" && (

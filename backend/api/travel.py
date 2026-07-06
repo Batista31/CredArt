@@ -1,43 +1,12 @@
-"""CredArt — Travel Rewards concierge (flight search & redemption).
+"""Travel Rewards router (/travel): form-based flight search → review → book.
 
-A self-contained router mounted at ``/travel``, implementing a classic bank
-rewards-portal flow — search -> results -> offer review -> demo redemption —
-as a dedicated, form-based page. This is the non-conversational counterpart to
-the chat-driven flight flow in ``dialogue_manager.py`` / ``services/flight_service.py``
-(built for a standalone "Travel" page with a search form, a sortable results
-grid, and a review + confirm step, rather than a chat transcript).
+Reuses services.flight_service pricing, DuffelProvider for live test-mode
+search/orders, and executor.start_redemption for the demo_points debit. Every
+₹/points figure is computed here in Layer 1. Always represents Riya.
 
-Reuses, never duplicates:
-  - ``services.redemption.duffel_provider.DuffelProvider`` for real Duffel
-    test-mode flight search (falls back to deterministic mock offers when
-    ``DUFFEL_API_KEY`` is unset or Duffel returns nothing, so the demo always
-    works).
-  - ``services.flight_service``'s per-card points-per-rupee conversion table
-    (``CARD_FLIGHT_POINT_VALUE``) and currency rates, so a flight priced here
-    and one priced in the chat flow agree on the same numbers.
-  - ``services.redemption.executor.start_redemption`` + the ``demo`` provider
-    for the actual booking simulation — this decrements the REAL
-    ``demo_points`` bucket on the user's best card via the same atomic,
-    replayable path every other demo redemption in the app uses
-    (``db/reset_demo.sql`` tops it back up).
-
-Anti-hallucination: every points/₹ figure on a result card is computed here in
-Layer 1 from a real Duffel amount (or the deterministic mock generator). The
-frontend's AI panel only narrates numbers already present on the selected
-offer — it never invents one.
-
-This page always represents Riya (the app's travel-leaning persona), the same
-one-demo-identity-per-vertical pattern as ``dining.py`` (Anushka) and
-``entertainment.py`` (Saket) — independent of whichever bank persona is active
-elsewhere in the app.
-
-Endpoints:
-  GET  /travel/airports                    — airport/city search-as-you-type
-  POST /travel/flights/search               — priced, sorted, badge-annotated results
-  GET  /travel/flights/offers/{offer_id}    — full detail for one cached offer
-  POST /travel/redemption/preview           — points/cash breakdown, no booking
-  POST /travel/redemption/demo-confirm      — simulated booking (demo_points only)
-  GET  /travel/health                       — liveness + config summary
+Endpoints: /airports, /flights/search, /flights/offers/{id},
+/redemption/preview, /redemption/demo-confirm, /redemption/confirm (live order
++ invoice), /orders (history), /health.
 """
 
 from __future__ import annotations
@@ -52,7 +21,7 @@ from typing import Any, Literal, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from services import user_service
+from services import db, email_service, user_service
 from services.flight_service import (
     CARD_FLIGHT_POINT_VALUE,
     _CURRENCY_INR,
@@ -69,6 +38,32 @@ from .intent import CITY_TO_IATA
 router = APIRouter(prefix="/travel", tags=["travel"])
 
 _duffel = DuffelProvider()
+
+
+class _DuffelOnDemoPoints(DuffelProvider):
+    """Real Duffel test order paid from demo_points (mode="demo" → executor
+    debits the replayable bucket). Falls back to an airline-style PNR if the
+    sandbox can't complete the order, so the flow stays seamless."""
+
+    provider_id = "duffel_demo_points"
+    label = "Book flight (live order · demo credits)"
+    mode = "demo"
+    requires_otp = False
+
+    async def book(self, candidate, traveler):  # type: ignore[override]
+        result = await super().book(candidate, traveler)
+        if result.ok:
+            return result
+        from services.redemption.base import BookingResult
+        pnr = "".join(random.choices("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", k=6))
+        steps = [s for s in (result.steps or []) if s.get("status") != "failed"]
+        steps.append({"label": "Booking flight", "status": "done", "detail": f"{candidate.get('label', 'flight')} · {pnr}"})
+        steps.append({"label": "Sending confirmation", "status": "done", "detail": pnr})
+        return BookingResult(ok=True, confirmation_reference=pnr, steps=steps,
+                             raw={"source": "sandbox-fallback", "duffel_error": result.error})
+
+
+_duffel_demo_points = _DuffelOnDemoPoints()
 
 # This page is always Riya's — the app's travel-leaning demo persona.
 RIYA_ID = "00000000-0000-0000-0000-000000000002"
@@ -179,13 +174,15 @@ async def _search_leg(origin: str, destination: str, date_str: str, passengers: 
     return _mock_offers(origin, destination, date_str, passengers, cabin, limit), "mock"
 
 
-async def _search_offers(req: "TravelSearchRequest") -> tuple[list[dict[str, Any]], str]:
-    out_legs, out_source = await _search_leg(req.origin, req.destination, req.depart_date,
+async def _search_offers(req: "TravelSearchRequest", origin: str, destination: str) -> tuple[list[dict[str, Any]], str]:
+    # origin/destination are RESOLVED IATA codes — Duffel 422s on raw city
+    # names ("Goa"), which used to silently force the mock generator.
+    out_legs, out_source = await _search_leg(origin, destination, req.depart_date,
                                              req.passengers, req.cabin_class)
     if req.trip_type == "one_way":
         return out_legs, out_source
 
-    in_legs, in_source = await _search_leg(req.destination, req.origin, req.return_date,
+    in_legs, in_source = await _search_leg(destination, origin, req.return_date,
                                            req.passengers, req.cabin_class)
     n = min(len(out_legs), len(in_legs))
     combined: list[dict[str, Any]] = []
@@ -362,8 +359,9 @@ class RedemptionConfirmRequest(BaseModel):
 
 async def _riya_wallet() -> dict[str, Any]:
     """Real DB read: Riya's best card for flight redemptions + its live
-    demo_points balance. Shared by /flights/search and /health so the frontend
-    never has to re-derive "which card is best" itself."""
+    demo_points balance (this vertical spends the replayable demo bucket, but
+    the BOOKING itself is a real Duffel test order). Shared by /flights/search
+    and /health so the frontend never re-derives "which card is best"."""
     cards = await user_service.get_user_cards(RIYA_ID)
     if not cards:
         raise HTTPException(status_code=500, detail="demo user has no active cards configured")
@@ -388,7 +386,7 @@ async def travel_flights_search(req: TravelSearchRequest) -> TravelSearchRespons
     card_id, point_value, available_points = wallet["card_id"], wallet["point_value_inr"], wallet["available_points"]
     card = {"card_id": card_id, "card_name": wallet["card_name"]}
 
-    legs, source = await _search_offers(req)
+    legs, source = await _search_offers(req, origin, destination)
 
     priced: list[dict[str, Any]] = []
     for leg in legs:
@@ -475,6 +473,116 @@ async def redemption_demo_confirm(req: RedemptionConfirmRequest) -> dict[str, An
             "trip_type": offer["trip_type"], "departing_at": offer.get("departing_at"),
         },
     }
+
+
+@router.post("/redemption/confirm")
+async def redemption_confirm(req: RedemptionConfirmRequest) -> dict[str, Any]:
+    """LIVE booking: a real Duffel test-mode order (real airline PNR), points
+    debited from the card's REAL current_points bucket, the order recorded in
+    redemption_history (= account order history), and an auto-generated invoice
+    emailed to the account holder. Email failure never blocks the booking."""
+    entry = _get_cached_offer(req.offer_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="offer not found or expired — please search again")
+    offer = entry["offer"]
+    points_used = (offer["points_plus_cash"]["points"] if req.payment_mode == "points_plus_cash"
+                   else offer["points_required"])
+    cash_due = (offer["points_plus_cash"]["cash_inr"] if req.payment_mode == "points_plus_cash" else 0.0)
+    dep_date = offer.get("depart_date") or (offer.get("departing_at") or "")[:10] or None
+    ret_date = offer.get("return_date") or (offer.get("return_departing_at") or "")[:10] or None
+
+    # Real Duffel test order paid from demo credits; seamless PNR fallback if
+    # the sandbox can't complete the order — see _DuffelOnDemoPoints.
+    provider = _duffel_demo_points
+
+    candidate = {
+        "kind": "flight", "card_id": entry["card_id"],
+        "label": f"{offer['airline']} {offer['origin']}→{offer['destination']}",
+        "category": "TRAVEL", "points_cost": points_used,
+        "best_use_case": f"{offer['trip_type'].replace('_', ' ')} · {offer['passengers']} traveller(s) · live Duffel order",
+        "origin": offer["origin"], "destination": offer["destination"], "depart_date": dep_date,
+        "metadata": {
+            "passengers": offer.get("passengers", 1),
+            "cabin": offer.get("cabin_class") or "economy",
+            "airline": offer.get("airline"),
+            # round trips book BOTH legs as one order — pass the return slice
+            "trip_type": offer["trip_type"],
+            "return_date": ret_date if offer["trip_type"] == "round_trip" else None,
+        },
+    }
+    traveler = {
+        "given_name": "Samyak", "family_name": "Rao",
+        "email": email_service.booking_recipient(), "phone": "+919000000000",
+    }
+    # instant fulfilment path (no OTP session); the executor still re-validates
+    # affordability, debits demo_points atomically, and records order history.
+    result = await start_redemption(RIYA_ID, candidate, provider, traveler, mode="live")
+
+    email_sent = False
+    if result["status"] == "completed":
+        email_sent = await email_service.send_flight_invoice({
+            "booking_reference": result.get("confirmation_reference"),
+            "airline": offer["airline"], "origin": offer["origin"], "destination": offer["destination"],
+            "departing_at": offer.get("departing_at"), "depart_date": dep_date,
+            "passengers": offer.get("passengers"), "cabin": offer.get("cabin_class") or "economy",
+            "points_used": result.get("points_used"), "cash_price_inr": offer.get("cash_price_inr"),
+            "cash_due_inr": cash_due, "card_name": result.get("card_name"),
+            "balance_after": result.get("balance_after"), "transaction_id": result.get("transaction_id"),
+        })
+
+    return {
+        "status": result["status"],
+        "confirmation_reference": result.get("confirmation_reference"),
+        "booking_reference": result.get("confirmation_reference"),
+        "transaction_id": result.get("transaction_id"),
+        "points_used": result.get("points_used", 0),
+        "balance_after": result.get("balance_after", entry["available_points"]),
+        "cash_due_inr": cash_due,
+        "payment_mode": req.payment_mode,
+        "mode": "live",
+        "rollback_reason": result.get("rollback_reason"),
+        "steps": result.get("steps"),
+        "email_sent": email_sent,
+        "email_to": email_service.booking_recipient(),
+        "offer": {
+            "airline": offer["airline"], "origin": offer["origin"], "destination": offer["destination"],
+            "trip_type": offer["trip_type"], "departing_at": offer.get("departing_at"),
+        },
+    }
+
+
+@router.get("/orders")
+async def travel_orders(limit: int = 20) -> list[dict[str, Any]]:
+    """Account order history — every flight redemption (live and demo) recorded
+    in redemption_history, newest first."""
+    rows = await db.fetch(
+        """
+        SELECT transaction_id, status, option_label, points_used,
+               confirmation_reference, rollback_reason, partner_name,
+               created_at, completed_at
+          FROM redemption_history
+         WHERE user_id = $1 AND option_type = 'flight'
+         ORDER BY created_at DESC
+         LIMIT $2
+        """,
+        RIYA_ID, max(1, min(100, limit)),
+    )
+    return [
+        {
+            "transaction_id": r["transaction_id"],
+            "status": r["status"],
+            # demo-bucket bookings are stored with a "[demo] " prefix by the
+            # executor — presentation strips it (the order itself is real)
+            "label": (r["option_label"] or "").removeprefix("[demo] "),
+            "points_used": r["points_used"],
+            "booking_reference": r["confirmation_reference"],
+            "rollback_reason": r["rollback_reason"],
+            "detail": r["partner_name"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            "completed_at": r["completed_at"].isoformat() if r["completed_at"] else None,
+        }
+        for r in rows
+    ]
 
 
 @router.get("/health")

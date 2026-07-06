@@ -525,7 +525,7 @@ export function RewardsCatalogue({ theme, initialCategory = null, onExit, onOpen
   function goToCartFromModal() { setModalItem(null); setShowCart(true); }
 
   return (
-    <div style={{ position: "relative", height: "100vh", display: "flex", flexDirection: "column",
+    <div style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column",
       overflow: "hidden", background: "var(--bg)", fontFamily: "var(--font)" }}>
       <Navbar theme={theme} persona={persona} balance={balance} activeUserId={activeUserId} onSwitch={switchUser}
         onHome={() => setCategoryKey(null)} onExit={onExit}

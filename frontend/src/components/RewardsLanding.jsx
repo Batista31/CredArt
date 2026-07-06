@@ -89,8 +89,8 @@ function Feature({ icon, title, children }) {
 export function RewardsLanding({ theme, onEnter, onSignOut }) {
   const totalRewards = CATEGORY_META.reduce((a, c) => a + CATALOGUE[c.key].length, 0);
   return (
-    <div className="cr-root no-sb" style={{ minHeight: "100vh", background: "var(--bg)", overflowY: "auto" }}>
-      {/* ---------- slim nav ---------- */}
+    <div className="cr-root no-sb" style={{ height: "100%", background: "var(--bg)", overflowY: "auto" }}>
+      {/* slim nav */}
       <div style={{ background: "#fff", borderBottom: "1px solid var(--brand-100)", padding: "12px 24px",
         display: "flex", alignItems: "center", gap: 12, position: "sticky", top: 0, zIndex: 10,
         boxShadow: "0 2px 10px rgba(12,39,72,0.05)" }}>

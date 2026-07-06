@@ -89,9 +89,13 @@ def _iata(name: str | None) -> str | None:
     if not name:
         return None
     name = str(name).strip()
+    # city names FIRST — "Goa" is 3 letters but means GOI, not airport code "GOA"
+    mapped = CITY_TO_IATA.get(name.lower())
+    if mapped:
+        return mapped
     if len(name) == 3 and name.isalpha():
         return name.upper()
-    return CITY_TO_IATA.get(name.lower())
+    return None
 
 
 def _passenger_count(slots: dict) -> int:
