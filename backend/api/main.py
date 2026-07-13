@@ -36,6 +36,7 @@ from .conversation import resume_conversation
 from .dialogue_manager import generate_concierge_response
 from .dining import router as dining_router
 from .entertainment import router as entertainment_router
+from .travel import router as travel_router
 from .intent import extract_intent
 from .orchestrator import orchestrate
 from .schemas import (
@@ -85,6 +86,11 @@ app.include_router(dining_router)
 # Entertainment & Cinema rewards concierge (TMDB now-playing + hardcoded rewards)
 # — self-contained router at /entertainment. Additive only; shares no bank state.
 app.include_router(entertainment_router)
+
+# Travel Rewards concierge (flight search/results/review/demo booking) — self-
+# contained router at /travel. Additive only; reuses flight_service/duffel_provider
+# but shares no state with the bank chat routes.
+app.include_router(travel_router)
 
 
 @app.get("/health")

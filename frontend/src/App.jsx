@@ -1,24 +1,17 @@
-/* CredArt — root router.
- *
- * Landing page → pick a category → that category's themed concierge. The theme
- * (navy+gold / green+yellow / purple+red) is applied by overriding the global
- * `--brand-*` CSS scale on a wrapper div, so each experience re-themes wholesale
- * with zero changes to the components inside it.
- *
- *   bank          → the original HDFC concierge (BankExperience), unchanged
- *   dining / ent. → the new themed CategoryChat, wired to the new backend routers
- *
- * A global laptop ⇄ mobile toggle re-renders the whole app inside a phone frame
- * (IOSDevice); every experience accepts a `view` prop and lays itself out to fit.
- */
+/* CredArt root: landing overview → pick an app → its themed experience.
+   The credit-card app is dual-face: Laptop = the mockkobie rewards store
+   (desktop), Mobile = the per-card concierge (phone). Dining/entertainment are
+   mobile concierge chats, shown in the phone frame on either toggle. */
 import React from "react";
 import { THEMES } from "./theme.jsx";
 import { Landing } from "./components/Landing.jsx";
 import { BankExperience } from "./components/BankExperience.jsx";
 import { CategoryChat } from "./components/CategoryChat.jsx";
+import { RewardsApp } from "./components/RewardsApp.jsx";
 import { IOSDevice } from "./components/IOSDevice.jsx";
+import { LaptopDevice } from "./components/LaptopDevice.jsx";
 
-/* Floating laptop / mobile switch — fixed top-right, visible on every screen. */
+/* Fixed top-right laptop / mobile switch. */
 function ViewToggle({ view, onChange }) {
   const seg = (key, label, icon) => {
     const active = view === key;
@@ -46,34 +39,45 @@ function ViewToggle({ view, onChange }) {
 }
 
 export default function App() {
-  const [category, setCategory] = React.useState(null);
+  const [category, setCategory] = React.useState(null); // null = landing overview
   const [view, setView] = React.useState("laptop");
   const mobile = view === "mobile";
   const back = () => setCategory(null);
 
+  // Credit-card laptop face = the store, so it renders in the rewards theme.
+  const themeKey = category === "bank" && !mobile ? "rewards" : category;
+
+  function renderApp() {
+    if (category === "bank") {
+      return mobile
+        ? <BankExperience view="mobile" onBack={back} />         // mobile: per-card concierge
+        : <RewardsApp theme={THEMES.rewards} onBack={back} />;   // laptop: mockkobie store
+    }
+    if (category === "rewards") return <RewardsApp theme={THEMES.rewards} onBack={back} />;
+    return <CategoryChat theme={THEMES[category]} view="mobile" onBack={back} />; // dining / entertainment
+  }
+
   const content = !category ? (
     <Landing view={view} onPick={setCategory} />
   ) : (
-    // Theme wrapper: the vars cascade to every child (including the bank chat).
-    // key={category} guarantees a clean remount (and fresh state) per category.
-    <div key={category} style={{
-      minHeight: mobile ? "100%" : "100vh", height: mobile ? "100%" : undefined,
-      background: THEMES[category].outerBg, ...THEMES[category].vars }}>
-      {category === "bank"
-        ? <BankExperience view={view} onBack={back} />
-        : <CategoryChat theme={THEMES[category]} view={view} onBack={back} />}
+    <div key={category} style={{ height: "100%", background: THEMES[themeKey].outerBg, ...THEMES[themeKey].vars }}>
+      {renderApp()}
     </div>
   );
+
+  // Phone frame for mobile view and for the concierge chats (which perform best
+  // on mobile); MacBook frame for the desktop store + landing overview.
+  const asPhone = mobile || category === "dining" || category === "entertainment";
 
   return (
     <>
       <ViewToggle view={view} onChange={setView} />
-      {mobile ? (
+      {asPhone ? (
         <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
           padding: "26px 12px", background: "radial-gradient(circle at 30% 18%, #241246, #120726 60%, #0a0416)" }}>
           <IOSDevice dark>{content}</IOSDevice>
         </div>
-      ) : content}
+      ) : <LaptopDevice>{content}</LaptopDevice>}
     </>
   );
 }

@@ -69,11 +69,10 @@ export function Landing({ onPick, view = "laptop" }) {
   const mobile = view === "mobile";
   return (
     <div className="cr-root no-sb" style={{
-      minHeight: mobile ? "100%" : "100vh", height: mobile ? "100%" : undefined,
-      width: "100%", overflowY: mobile ? "auto" : "visible",
+      height: "100%", width: "100%", overflowY: "auto",
       background: "radial-gradient(circle at 18% 8%, #241246, #120726 55%, #0a0416)",
       display: "flex", flexDirection: "column", alignItems: "center",
-      padding: mobile ? "40px 18px 34px" : "56px 20px 48px",
+      padding: mobile ? "40px 18px 34px" : "56px 20px 48px", boxSizing: "border-box",
     }}>
       {/* brand mark */}
       <div style={{ display: "inline-flex", alignItems: "center", gap: 10, marginBottom: 26 }}>
