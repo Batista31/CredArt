@@ -233,6 +233,7 @@ function describeConvo(c) {
 
 export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, onAddToCart, onViewItem, onCheckout, onSpend, onOpenTravel, view = "laptop" }) {
   const [open, setOpen] = React.useState(false);
+  const [big, setBig] = React.useState(true); // default large; header button shrinks it
   const idc = React.useRef(0);
   const nid = () => ++idc.current;
   const [messages, setMessages] = React.useState([]);
@@ -480,8 +481,9 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
       {/* ---------- chat panel ---------- */}
       {open && (
         <div style={{ position: "absolute", right: mobile ? 12 : 22, bottom: mobile ? 88 : 94, zIndex: 61,
-          width: mobile ? "calc(100% - 24px)" : "min(400px, calc(100% - 44px))",
-          height: mobile ? "calc(100% - 150px)" : "min(560px, calc(100% - 130px))",
+          width: mobile ? "calc(100% - 24px)" : big ? "min(580px, calc(100% - 44px))" : "min(400px, calc(100% - 44px))",
+          height: mobile ? "calc(100% - 150px)" : big ? "min(780px, calc(100% - 116px))" : "min(560px, calc(100% - 130px))",
+          transition: "width .28s cubic-bezier(.2,.8,.2,1), height .28s cubic-bezier(.2,.8,.2,1)",
           background: "#fff", borderRadius: 20, overflow: "hidden", display: "flex", flexDirection: "column",
           boxShadow: "0 26px 60px rgba(30,27,75,0.42), 0 0 0 1px rgba(0,0,0,0.05)",
           animation: "sheetUp .28s cubic-bezier(.2,.8,.2,1)" }}>
@@ -503,6 +505,19 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 5h2l1.5 11h10l1.5-8H7" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /><circle cx="9" cy="20" r="1.4" fill="#fff" /><circle cx="17" cy="20" r="1.4" fill="#fff" /></svg>
                 <span className="num">{cartCount}</span>
               </span>
+            )}
+            {!mobile && (
+              <button className="tap" onClick={() => setBig((b) => !b)} title={big ? "Smaller window" : "Expand window"}
+                style={{ background: "rgba(255,255,255,0.16)", border: "none", width: 30, height: 30, borderRadius: 9,
+                  display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
+                {big ? (
+                  /* shrink: arrows pointing inward */
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" stroke="#fff" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                ) : (
+                  /* expand: arrows pointing outward */
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" stroke="#fff" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                )}
+              </button>
             )}
             <button className="tap" onClick={openHistory} title="Conversation history"
               style={{ background: showHistory ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.16)", border: "none", width: 30, height: 30, borderRadius: 9,

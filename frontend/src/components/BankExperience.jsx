@@ -238,7 +238,7 @@ export function BankExperience({ onBack, view = "laptop" }) {
           </Centered>
         )}
         {screen === "chat" && (
-          <Concierge user={user} card={chatCard} mode={mode} resumeConversationId={resumeConvoId} merchFloor={merchFloor}
+          <Concierge user={user} card={chatCard} cards={cards} mode={mode} resumeConversationId={resumeConvoId} merchFloor={merchFloor}
             onBack={() => { setResumeConvoId(null); go(resumeConvoId ? "history" : "dashboard", "back"); }}
             onRedeem={onRedeem}
             wishlistLabels={wishlistLabels} dismissedLabels={dismissedLabels}

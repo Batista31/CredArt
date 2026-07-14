@@ -1,0 +1,10 @@
+CredArt commands:
+
+
+cd "C:\Users\USER\OneDrive\Desktop\CredArt"; .\run_demo.ps1 -Reset -Preflight
+
+
+
+cd "C:\Users\USER\OneDrive\Desktop\CredArt\mockkobie"; .\run_demo.ps1
+
+C:\Users\USER\OneDrive\Desktop\CredArt/backend/admin_stats.py

@@ -9,8 +9,6 @@ from services import (
     conversation_service,
     memory_service,
     recommendation_session_service,
-    reward_catalogue_service,
-    scoring_service,
     user_service,
 )
 
@@ -537,6 +535,11 @@ def _card_switch_note(suggestion: dict | None, known_slots: dict) -> str:
 async def generate_concierge_response(
     user_id: str, message: str, conversation_id: str | None = None, active_card_id: str | None = None
 ) -> dict:
+    # Guardrail: strip control chars / collapse whitespace / cap length before the
+    # message touches the LLM, intent extraction, or the conversation log.
+    from services.llm_guardrails import sanitize_user_message
+    message = sanitize_user_message(message) or "what can I do with my points"
+
     user = await user_service.get_user(user_id)
     if user is None:
         raise ValueError("unknown user_id")

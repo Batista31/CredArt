@@ -130,10 +130,17 @@ function OptionCard({ cand, mode, onRedeem, wishlisted, dismissed, onWishlist, o
   );
 }
 
-export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, dismissedLabels, onWishlist, onDismiss, resumeConversationId, merchFloor }) {
+const RESUME_CHIP = "Continue where we left off";
+const FRESH_CHIP = "Start fresh";
+
+export function Concierge({ user, card, cards, mode, onBack, onRedeem, wishlistLabels, dismissedLabels, onWishlist, onDismiss, resumeConversationId, merchFloor }) {
   const cardName = card?.card_name || "Concierge";
   const isMillennia = card?.card_id === "hdfc_millennia";
-  const headerPts = card ? card.current_points : (user?.cards || []).reduce?.((a, c) => a + (c.current_points || 0), 0);
+  // No card picked → sum across all cards. `cards` comes from BankExperience's
+  // /cards fetch (user object itself has no cards array — that was the 0-points bug).
+  const headerPts = card
+    ? (card.current_points || 0)
+    : (cards || user?.cards || []).reduce((a, c) => a + (c.current_points || 0), 0);
   const currencyLabel = card?.currency_name || "points";
 
   const quickChips = isMillennia
@@ -152,6 +159,7 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
   const [showHistory, setShowHistory] = React.useState(false);
   const scroller = React.useRef(null);
   const started = React.useRef(false);
+  const resumeIdRef = React.useRef(null); // latest conversation id for the resume prompt
 
   function introMessage() {
     let text = `Hi ${(user?.name || "there").split(" ")[0]} — CredArt here. Let's make your points count ✨`;
@@ -203,7 +211,14 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
       try {
         const { conversations } = await api.conversations();
         setConvos(conversations || []);
-        if (conversations && conversations.length) { await loadConversation(conversations[0].id); return; }
+        if (conversations && conversations.length) {
+          // Don't silently restore the old chat — offer the choice instead.
+          resumeIdRef.current = conversations[0].id;
+          setMessages([{ id: nid(), who: "bot",
+            text: `Hi ${(user?.name || "there").split(" ")[0]} — welcome back! We have an earlier conversation. Continue where you left off, or start fresh?`,
+            chips: [RESUME_CHIP, FRESH_CHIP] }]);
+          return;
+        }
       } catch { /* fall through to a fresh intro */ }
       showIntro();
     })();
@@ -217,6 +232,9 @@ export function Concierge({ user, card, mode, onBack, onRedeem, wishlistLabels, 
 
   async function sendText(text) {
     if (!text || busy) return;
+    // Resume-prompt chips are local actions, never sent to the backend.
+    if (text === RESUME_CHIP && resumeIdRef.current) { loadConversation(resumeIdRef.current); return; }
+    if (text === FRESH_CHIP) { showIntro(); return; }
     pushMsg({ who: "user", text });
     setBusy(true); setErr(null);
     try {
