@@ -39,12 +39,8 @@ router = APIRouter(prefix="/dining", tags=["dining"])
 
 
 # ---------------------------------------------------------------------------
-# Layer 1 — Subway rewards catalogue (hardcoded, deterministic)
-#
-# Each item carries everything the scorer needs: a real ₹ value (so value/point
-# is computed, never invented), a category, a `veg` flag (drives the vegetarian
-# filter), and `tags` (drive the preference boost). `special=True` marks a
-# limited-time offer that the expiry-risk dimension treats as urgent.
+# Layer 1 — Subway rewards catalogue (hardcoded, deterministic). Real ₹ values
+# (never invented), `veg` drives the filter, `tags` the boost, `special` = urgent.
 # ---------------------------------------------------------------------------
 
 CatalogueItem = dict[str, Any]
@@ -87,10 +83,8 @@ _CATALOGUE_BY_ID = {i["id"]: i for i in CATALOGUE}
 
 
 # ---------------------------------------------------------------------------
-# Demo user (Subway loyalty profile). This is OUR data — the anti-hallucination
-# analogue of the bank's user/CMR tables. The LLM never sees it directly.
-# `demo_points` is a separate replayable bucket (like the bank demo flow) so a
-# redemption is safe to run repeatedly.
+# Demo user (Subway loyalty profile) — anti-hallucination analogue of the bank's
+# user/CMR tables; LLM never sees it. `demo_points` = replayable bucket.
 # ---------------------------------------------------------------------------
 
 DEFAULT_USER_ID = "dining_user_arjun"
@@ -116,11 +110,8 @@ def _get_user(user_id: str | None) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Layer 1 — adapted 5-dimension scoring (deterministic, 0–100).
-#
-# Same weights and structure as services/scoring_service.py, re-expressed for a
-# dining catalogue. The score is an internal ranking signal only — never shown
-# to the user as a ₹ value, and the LLM never recomputes it.
+# Layer 1 — 5-dim scoring (deterministic, 0–100). Same weights as
+# scoring_service.py; internal signal only, LLM never recomputes.
 # ---------------------------------------------------------------------------
 
 WEIGHTS = {
@@ -231,9 +222,8 @@ def _score_candidates(items: list[CatalogueItem], user: dict[str, Any],
 
 
 # ---------------------------------------------------------------------------
-# Conversational dialogue — deterministic intent parse + one-question-at-a-time
-# slot filling. Same pattern as dialogue_manager.py (clarify gate, chips), sized
-# to the dining domain so no LLM is needed to gather context.
+# Conversational dialogue — deterministic intent parse + slot filling, same
+# pattern as dialogue_manager.py; no LLM needed to gather context.
 # ---------------------------------------------------------------------------
 
 _CLARIFY_MARKER = "__clarify__"

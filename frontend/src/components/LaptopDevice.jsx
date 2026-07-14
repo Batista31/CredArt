@@ -6,7 +6,7 @@ export function LaptopDevice({ children }) {
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center",
       justifyContent: "center", padding: "20px 16px 8px",
-      background: "radial-gradient(circle at 30% 18%, #241246, #120726 60%, #0a0416)" }}>
+      background: "radial-gradient(circle at 30% 18%, #FBF7EE, #F3EDE0 62%, #EAE1CF)" }}>
       {/* screen */}
       <div style={{ width: "min(1440px, 95vw)", height: "min(860px, calc(100vh - 92px))",
         background: "#0d0d12", borderRadius: 20, padding: "34px 14px 16px", position: "relative",

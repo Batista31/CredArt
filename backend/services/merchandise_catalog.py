@@ -98,6 +98,7 @@ MIN_POINTS: int = min(p["points"] for p in PRODUCTS)
 def search(query: str, limit: int = 4) -> list[dict]:
     """Keyword-match the catalogue. Deterministic: scores by matched tokens,
     then popularity, then price (cheapest first, so affordable options lead)."""
+    import re
     q = (query or "").lower().strip()
     if not q:
         return []
@@ -107,9 +108,11 @@ def search(query: str, limit: int = 4) -> list[dict]:
         haystack = " ".join([p["title"].lower(), p["brand"].lower(), *p["keywords"]])
         score = 0
         for kw in p["keywords"]:
-            if kw in q:
+            # Word-boundary: kw "back" must not hit a "backpack" query.
+            if re.search(rf"\b{re.escape(kw)}\b", q):
                 score += 3 if " " in kw else 2  # phrase match beats single word
-        score += sum(1 for t in tokens if t in haystack)
+        # Word-boundary token match: "air" must not hit the brand "Conair".
+        score += sum(1 for t in tokens if re.search(rf"\b{re.escape(t)}", haystack))
         if score > 0:
             scored.append((score, p))
     scored.sort(key=lambda sp: (-sp[0], not sp[1]["popular"], sp[1]["points"]))

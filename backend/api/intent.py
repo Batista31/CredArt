@@ -21,6 +21,18 @@ _CATEGORY_HINTS = {
     "WELLNESS": ["gym", "fitness", "cult", "wellness", "workout", "health"],
 }
 
+_RELATION_WORDS = ["mother", "mom", "mum", "father", "dad", "son", "daughter", "wife",
+                   "husband", "brother", "sister", "friend", "grandma", "grandmother",
+                   "grandpa", "grandfather", "aunt", "uncle", "cousin", "colleague",
+                   "boss", "girlfriend", "boyfriend", "partner", "parents", "kid", "kids"]
+
+# Interest words a user states about a gift recipient ("she likes cooking").
+# Mapped to concrete product nouns by services/gift_registry.py.
+_INTEREST_WORDS = ["cooking", "baking", "coffee", "tea", "fitness", "yoga", "music",
+                   "reading", "travel", "travelling", "traveling", "gaming", "cars",
+                   "photography", "gardening", "art", "painting", "movies", "fashion",
+                   "tech", "gadgets", "sports", "cricket", "skincare", "wellness"]
+
 _EXPIRY = ["expir", "losing", "lose", "about to", "deadline", "running out", "before i lose"]
 _TRANSFER = ["transfer", "convert", "miles", "airline", "krisflyer", "vistara",
              "marriott", "bonvoy", "accor", "maharaja", "frequent flyer"]
@@ -91,6 +103,22 @@ def _match_word(text: str, words: list[str]) -> bool:
     return any(re.search(rf"\b{re.escape(w)}\b", text) for w in words)
 
 
+def _gift_signals(text: str) -> tuple[str | None, list[str]]:
+    """(recipient relation, stated interests) when the message is a gift for someone.
+
+    A relation word plus a gifting cue ("gift", "present", "for her birthday") means
+    gift_purchase — the recipient wins over the "gift(card)" keyword collision."""
+    relation = next((w for w in _RELATION_WORDS if re.search(rf"\b{w}s?\b", text)), None)
+    if not relation:
+        return None, []
+    gifting = re.search(r"\b(gift|present|surprise|something for)\b", text) or \
+        re.search(r"\b(birthday|anniversary|wedding|graduation|diwali|christmas|rakhi|mother's day|father's day)\b", text)
+    if not gifting:
+        return None, []
+    interests = [w for w in _INTEREST_WORDS if re.search(rf"\b{w}\b", text)]
+    return relation, interests
+
+
 async def extract_intent(
     message: str,
     partial_intent: dict | None = None,
@@ -137,6 +165,18 @@ async def extract_intent(
             if prod and merged.get("journey_type") in ("product_purchase", "merchandise_purchase", "gift_purchase"):
                 merged.setdefault("slots", {})
                 merged["slots"].setdefault("product_category", prod)
+            # Deterministic gift override: "gift for my mother, she likes cooking"
+            # must never land in voucher_redemption because of the word "gift".
+            relation, interests = _gift_signals(text)
+            if relation and merged.get("journey_type") in (
+                    None, "voucher_redemption", "product_purchase",
+                    "general_reward_advice", "gift_purchase"):
+                merged["journey_type"] = "gift_purchase"
+                merged.setdefault("kind", "redeem")
+                merged.setdefault("slots", {})
+                merged["slots"].setdefault("recipient_type", relation)
+                if interests:
+                    merged["slots"].setdefault("recipient_interests", interests)
             # Completeness is owned by the dialogue manager (clarify gate, static
             # slot-filling, planner, and the post-candidate LLM check). Running a
             # second LLM completeness round here added a blocking round-trip to
@@ -164,10 +204,13 @@ async def extract_intent(
     else:
         kind = "unknown"
 
+    relation, interests = _gift_signals(text)
     if any(word in text for word in ("flight", "fly", "airport", "vacation", "trip")):
         journey_type = "travel_flight"
     elif any(word in text for word in ("hotel", "stay", "resort")):
         journey_type = "travel_hotel"
+    elif relation:
+        journey_type = "gift_purchase"
     elif _match(text, _PRODUCT_WORDS):
         journey_type = "product_purchase"
     elif any(word in text for word in ("living room", "sofa", "rug", "coffee table", "home")):
@@ -200,12 +243,18 @@ async def extract_intent(
         if budget_match and any(token in text for token in ("budget", "points", "pts", "inr", "rs")):
             slots["budget"] = budget_match.group(1).replace(",", "")
 
-    if journey_type == "product_purchase":
+    if journey_type in ("product_purchase", "gift_purchase"):
         prod = next((w for w in _PRODUCT_WORDS if w in text), None)
         if prod:
             slots["product_category"] = prod
-    if "for " in text and journey_type in ("product_purchase", "gift_purchase"):
-        slots["recipient_type"] = text.split("for ", 1)[1][:30]
+    if journey_type == "gift_purchase" and relation:
+        slots["recipient_type"] = relation
+        if interests:
+            slots["recipient_interests"] = interests
+        occasion = re.search(
+            r"\b(birthday|anniversary|wedding|graduation|diwali|christmas|rakhi|mother's day|father's day)\b", text)
+        if occasion:
+            slots["occasion"] = occasion.group(1)
     if "to " in text and journey_type.startswith("travel"):
         slots["destination"] = text.split("to ", 1)[1].split()[0].strip(",.")
 

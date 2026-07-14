@@ -139,7 +139,8 @@ def _expiry_risk(days: int | None) -> float:
 async def score_candidates(user_id: str, candidates: list, cards: list[dict],
                            intent_category: str | None = None,
                            *, prefs: dict | None = None,
-                           wishlist_labels: set | None = None) -> list:
+                           wishlist_labels: set | None = None,
+                           gift_mode: bool = False) -> list:
     """Attach 5-dim scores + total, sort desc, set rank. Mutates+returns list.
 
     `intent_category` is the current request's category (e.g. DINING); when set,
@@ -168,7 +169,10 @@ async def score_candidates(user_id: str, candidates: list, cards: list[dict],
 
     for i, c in enumerate(candidates):
         c.score_financial = round(fin[i], 1)
-        c.score_lifestyle = round(_lifestyle(c, prefs, max_pref, intent_category), 1)
+        # Gift mode: the recipient isn't the user — the user's own lifestyle
+        # weights and CMR wishlist must not steer the ranking. Lifestyle goes
+        # neutral; interest fit was already applied by the gift search itself.
+        c.score_lifestyle = 60.0 if gift_mode else round(_lifestyle(c, prefs, max_pref, intent_category), 1)
         c.score_redemption_prob = round(_redemption_prob(c, rates, prefs), 1)
         c.score_expiry_risk = round(_expiry_risk(days_of.get(c.card_id)), 1)
         c.score_flexibility = round(FLEXIBILITY.get(c.kind, 50.0), 1)
@@ -179,7 +183,7 @@ async def score_candidates(user_id: str, candidates: list, cards: list[dict],
             + WEIGHTS["expiry_risk"] * c.score_expiry_risk
             + WEIGHTS["flexibility"] * c.score_flexibility
         )
-        boost = cmr_service.preference_boost(c, prefs, wishlist_labels)
+        boost = 0.0 if gift_mode else cmr_service.preference_boost(c, prefs, wishlist_labels)
         c.score_total = round(min(100.0, base + boost), 1)
 
     candidates.sort(key=lambda c: c.score_total, reverse=True)

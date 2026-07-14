@@ -217,7 +217,8 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
     # intent_category steers the current request; prefs/wishlist add the CMR boost.
     candidates = await scoring_service.score_candidates(
         uid, candidates, cards, intent_category=intent.category,
-        prefs=prefs, wishlist_labels=wishlist)
+        prefs=prefs, wishlist_labels=wishlist,
+        gift_mode=intent.journey_type == "gift_purchase")
     if candidates:
         trace.append(ToolCall(tool="score_candidates", args={"dims": 5},
                               result_count=len(candidates)))

@@ -221,11 +221,23 @@ async def _finalize(txn_id, user_id, candidate, provider, traveler, mode, row) -
         )
 
         # Dynamic lifestyle learning — nudge confirmed category weight up (best-effort).
+        # Gifts are excluded: buying for someone else says nothing about the user's
+        # own tastes, so a gift never tilts their preference profile.
         from .. import user_service
-        try:
-            await user_service.update_preferences_after_redemption(user_id, candidate.get("category"))
-        except Exception as exc:  # noqa: BLE001
-            log.warning("update_preferences failed for %s: %s", user_id, exc)
+        _meta = candidate.get("metadata") or {}
+        if not _meta.get("gift"):
+            try:
+                await user_service.update_preferences_after_redemption(user_id, candidate.get("category"))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("update_preferences failed for %s: %s", user_id, exc)
+        elif _meta.get("gift_for"):
+            # Confirmed gift → remember what was bought for whom (best-effort).
+            from .. import personalization_service
+            try:
+                await personalization_service.remember_relationship(
+                    user_id, str(_meta["gift_for"]), last_gift=label)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("remember_relationship failed for %s: %s", user_id, exc)
 
         return {
             "status": "completed", "transaction_id": txn_id,

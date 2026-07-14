@@ -37,7 +37,10 @@ export function IOSDevice({ children, width = 402, height = 874, dark = true }) 
         <IOSStatusBar dark={dark} />
       </div>
       <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
-        <div style={{ flex: 1, overflow: "hidden" }}>{children}</div>
+        {/* status-bar safe area: app content starts below the notch + clock so
+            headers/persona pills never collide with the black pill */}
+        <div style={{ height: 56, flexShrink: 0 }} />
+        <div style={{ flex: 1, overflow: "hidden", borderRadius: "22px 22px 0 0" }}>{children}</div>
       </div>
       <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 60, height: 34,
         display: "flex", justifyContent: "center", alignItems: "flex-end", paddingBottom: 8, pointerEvents: "none" }}>

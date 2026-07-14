@@ -159,6 +159,42 @@ async def search_merchandise_candidates(
     return [_catalog_candidate(p, card, balance, i + 1) for i, p in enumerate(products)], suggestion
 
 
+async def search_gift_candidates(
+    interests: list[str], cards: list[dict], limit: int = 4, active_card_id: str | None = None
+) -> tuple[list[Candidate], dict | None]:
+    """Gift picks driven by the RECIPIENT's interests, not the user's profile.
+    Maps interests → catalogue nouns (gift_registry), searches each, merges
+    top hits. ([], None) on miss → caller offers the voucher fallback."""
+    from . import gift_registry, merchandise_catalog
+    queries = gift_registry.product_queries(interests or [])
+    if not queries:
+        return [], None
+    card, suggestion = pick_card(cards, CARD_VOUCHER_POINT_VALUE, _DEFAULT_POINT_VALUE, active_card_id)
+    if card is None:
+        return [], None
+    balance = card.get("current_points") or 0
+    seen: set[str] = set()
+    products: list[dict] = []
+    for q in queries:
+        for p in merchandise_catalog.search(q, limit=2):
+            if p["id"] not in seen:
+                seen.add(p["id"])
+                products.append(p)
+        if len(products) >= limit:
+            break
+    if not products:
+        return [], None
+    products = products[:limit]
+    products.sort(key=lambda p: (balance < p["points"], p["points"]))  # affordable first
+    cands = [_catalog_candidate(p, card, balance, i + 1) for i, p in enumerate(products)]
+    for c in cands:
+        # Gift marker: executor skips the user's own preference-weight nudge on
+        # confirm (a gift says nothing about what the USER likes), and D-phase
+        # memory attributes the purchase to the recipient relation instead.
+        c.metadata = {**(c.metadata or {}), "gift": True, "gift_interests": interests}
+    return cands, suggestion
+
+
 def popular_catalog_candidates(
     cards: list[dict], limit: int = 3, active_card_id: str | None = None
 ) -> list[Candidate]:

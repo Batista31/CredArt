@@ -37,8 +37,10 @@ _JOURNEY_SLOTS: dict[str, dict[str, list[str]]] = {
         "optional": ["budget", "brand_preference", "priority", "points_cash_preference"],
     },
     "gift_purchase": {
-        "required": ["recipient_type", "occasion", "budget"],
-        "optional": ["category", "delivery_timeline"],
+        # Recipient alone is enough — interests map to products via gift_registry,
+        # and catalogue prices are fixed, so budget never blocks gift recs.
+        "required": ["recipient_type"],
+        "optional": ["occasion", "recipient_interests", "budget", "category", "delivery_timeline"],
     },
     "voucher_redemption": {
         "required": ["voucher_type", "budget"],
@@ -51,12 +53,11 @@ _JOURNEY_SLOTS: dict[str, dict[str, list[str]]] = {
     "general_reward_advice": {"required": ["goal"], "optional": ["budget", "timeline"]},
 }
 
-# Slots that describe ONE specific request ("what am I shopping for / booking
-# right now"), not a durable user preference. These must never be carried over
-# from a past conversation's memory — otherwise a previous "phone" search would
-# silently fill the product_category of a new "cooker" conversation.
+# Per-request slots, never carried across conversations — else a past "phone"
+# search would silently fill a new "cooker" conversation's product_category.
 _TRANSIENT_SLOTS = frozenset({
     "product_category", "required_products", "item", "recipient_type", "occasion",
+    "recipient_interests",
     "destination", "origin", "departure_window", "return_date", "check_in_window",
     "nights", "guests", "passengers", "cabin_class", "voucher_type", "topic", "goal", "budget",
 })
@@ -82,11 +83,8 @@ _SLOT_QUESTIONS = {
     "topic": "What would you like me to check: benefits, fees, lounge, transfer partners, or something else?",
 }
 
-# Tap-to-answer chips shown under a slot question. Slots with a small set of
-# natural choices get fixed chips; truly free-text slots (product_category…) get
-# none so the user just types. Origin/destination offer popular cities as a
-# head start — typing any other city still works. Chip text is chosen to parse
-# cleanly on the way back in (_resolve_date for dates, CITY_TO_IATA elsewhere).
+# Tap-to-answer chips per slot question; free-text slots get none. Chip text is
+# chosen to parse cleanly on the way back in (_resolve_date, CITY_TO_IATA).
 _SLOT_CHIPS: dict[str, list[str]] = {
     "cabin_class": ["Economy", "Premium economy", "Business"],
     "destination": ["Goa", "Mumbai", "Delhi", "Dubai"],
@@ -369,10 +367,8 @@ async def _orchestrate_scoped(intent: Any, user: dict, cards: list[dict], active
     return candidates, trace, meta
 
 
-# Vague / domain-level openers ("how should I spend my points?", "I want to travel")
-# get ONE clarifying question before we recommend, so the concierge gathers intent
-# instead of guessing. Pure "what's expiring" (points_expiry_help / check_expiry) stays
-# instant and is intentionally NOT here.
+# Vague openers get ONE clarifying question before recommending. Expiry asks
+# stay instant — intentionally not listed here.
 _CLARIFY_JOURNEYS = frozenset({"general_reward_advice", "card_benefit_lookup"})
 _CLARIFY_MARKER = "__clarify__"
 
@@ -425,9 +421,8 @@ def _route_clarify_answer(text: str) -> tuple[str | None, str | None]:
     return (None, None)
 
 
-# Preference-weight column -> the category we'd recommend if that weight dominates.
-# (cashback is deliberately excluded — a cashback lean routes to its own journey, not a
-# category-filtered recommendation, and it's never a demo persona's top weight.)
+# Preference-weight column -> category to lead with when it dominates.
+# cashback excluded: it routes to its own journey, not a category rec.
 _LEAN_PREF_TO_CATEGORY = {
     "travel_weight": "TRAVEL",
     "dining_weight": "DINING",
@@ -563,10 +558,8 @@ async def generate_concierge_response(
     rec_state = existing_state.get("recommendation_state") or {}
     partial_intent_dict = rec_state.get("partial_intent") if isinstance(rec_state, dict) else None
     intent = await extract_intent(message, partial_intent=partial_intent_dict, conversation_history=conv_history_dicts)
-    # A concrete new classification always wins — it means the LLM has real signal
-    # (e.g. an answer like "Bangalore to Mumbai, 3 people" resolves cleanly to
-    # travel_flight). Only fall back to the previously established journey_type when
-    # this turn's extraction genuinely didn't produce one (a bare slot-fill reply).
+    # A concrete new classification wins; fall back to the established
+    # journey_type only when this turn extracted none (bare slot-fill reply).
     prior_response_type = existing_state.get("response_type")
     # Category currently being shown via a lean/clarify route (drives switch chips + lead).
     auto_leaned_category: str | None = None
@@ -593,12 +586,8 @@ async def generate_concierge_response(
         journey_type = existing_state["journey_type"]
     else:
         journey_type = existing_state.get("journey_type") or "general_reward_advice"
-    # "I want to travel" etc: the LLM correctly can't tell flight vs hotel yet, so
-    # journey_type comes back null and we'd otherwise default to general_reward_advice —
-    # which skips the context-gathering planner entirely, so we'd never ask
-    # destination/dates. Default a fresh, vague TRAVEL-category ask to travel_flight so
-    # the planner engages; it naturally upgrades to travel_hotel next turn once the
-    # user's answer makes that clear (handled by the branch above).
+    # Vague TRAVEL ask ("I want to travel") → default travel_flight so the planner
+    # engages (else general_reward_advice would skip it); upgrades to hotel next turn.
     if (
         not intent.journey_type
         and journey_type == "general_reward_advice"
@@ -607,12 +596,8 @@ async def generate_concierge_response(
     ):
         journey_type = "travel_flight"
     known_slots = _merge_slots(existing_state.get("known_slots") or {}, intent.slots)
-    # NOTE: deliberately NOT merging in `memory.structured_preferences` here.
-    # remember_conversation() persists each conversation's raw known_slots verbatim —
-    # literal one-off answers ("no just give me any"), not curated preferences — so
-    # every key in it is per-conversation noise, not a safe cross-session default.
-    # Genuinely durable preferences (preferred_airlines, hotel chains, cuisines,
-    # family_size) are sourced correctly elsewhere via cmr_service/user_service.
+    # Deliberately NOT merging memory.structured_preferences here: it holds raw
+    # per-conversation slot noise. Durable prefs come via cmr_service/user_service.
     cards = await user_service.get_user_cards(user_id)
     # Explicit card switch ("use regalia", "switch to infinia") overrides the opened
     # concierge card for the rest of this conversation.
@@ -647,11 +632,8 @@ async def generate_concierge_response(
         known_slots["destination"] = intent.destination
     if intent.depart_date:
         known_slots["departure_window"] = intent.depart_date
-    # Normalize what the user actually GAVE us (we still ask for each required detail —
-    # nothing is assumed), so an answer isn't wasted or re-asked:
-    #   - city names like "Bengaluru" → IATA codes the flight search understands
-    #   - relative/natural dates ("next Friday", "21 July") → a real ISO date, so once the
-    #     user answers the dates question we never re-ask it.
+    # Normalize given answers so they're never re-asked: city → IATA,
+    # natural dates ("next Friday") → ISO. Nothing is assumed, only converted.
     if journey_type in ("travel_flight", "travel_hotel"):
         from .intent import CITY_TO_IATA
         _today = _dt.date.today()
@@ -693,12 +675,27 @@ async def generate_concierge_response(
                 if _w in _msg_l:
                     known_slots["product_category"] = _w
                     break
+    # Relationship memory: "gift for my son" with no interest stated → recall what
+    # we learned about the son in past gift conversations and seed it silently.
+    gift_memory_note = ""
+    if journey_type == "gift_purchase" and known_slots.get("recipient_type"):
+        from services import gift_registry, personalization_service
+        _rel = gift_registry.canonical_relation(str(known_slots["recipient_type"]))
+        known_slots["recipient_type"] = _rel
+        if not known_slots.get("recipient_interests"):
+            _prof = await personalization_service.relationship_profile(user_id, _rel)
+            if _prof and _prof.get("interests"):
+                known_slots["recipient_interests"] = _prof["interests"]
+                gift_memory_note = (
+                    f"You've mentioned your {_rel} likes "
+                    f"{', '.join(_prof['interests'])} — I kept that in mind. ")
     missing_slots = _missing_slots(journey_type, known_slots)
 
     recommendations: list[dict] = []
     response_type = "general_answer"
     assistant_message = ""
     next_actions: list[str] = []
+    gift_voucher_chip = False  # set True when a gift rec should offer the voucher as a tap, not inline text
     tool_trace: list[dict] = []
     candidates = []
     requires_confirmation = False
@@ -714,6 +711,10 @@ async def generate_concierge_response(
         # Product already pinned for a merch journey → recommend NOW, don't plan
         # questions (catalogue prices are fixed; there's nothing left to ask).
         and not (journey_type in _MERCH_JOURNEYS and known_slots.get("product_category"))
+        # Gift with recipient + interests known → engine maps interests to
+        # products itself; asking more questions would be stalling.
+        and not (journey_type == "gift_purchase"
+                 and known_slots.get("recipient_type") and known_slots.get("recipient_interests"))
     )
     # Catalogue results didn't land last turn and the user pushed back without
     # naming a new product → offer the flexible Amazon voucher (fallback, never
@@ -738,11 +739,8 @@ async def generate_concierge_response(
             questions_asked=known_slots.get("_planner_questions_asked", 0),
             profile_defaults=profile_defaults)
 
-    # Personalization-forward opener: a vague "how do I spend my points?" with no stated
-    # category shouldn't just ask — if the user's stored preference weights show a clear
-    # lean, lead STRAIGHT into that category's recommendations (with switch chips to redirect).
-    # This proves personalization exists without the user picking a lane. A flat/default
-    # profile has no dominant lean, so it falls through to the clarify question below.
+    # Personalization-forward opener: on a vague ask, a clear preference lean leads
+    # straight into that category (switch chips to redirect); flat profile → clarify.
     if (journey_type in _CLARIFY_JOURNEYS and not answering_clarify
             and intent.category is None
             and intent.kind not in ("greeting", "check_expiry")):
@@ -829,8 +827,29 @@ async def generate_concierge_response(
             # Rewards catalogue first — the bank's own merchandise store is the
             # primary channel; the Amazon voucher is strictly the fallback.
             from services import merchandise_service
-            merch_cands, card_suggestion = await merchandise_service.search_merchandise_candidates(
-                str(search_term), cards, active_card_id=effective_card_id)
+            gift_interests = known_slots.get("recipient_interests") or []
+            if isinstance(gift_interests, str):
+                gift_interests = [gift_interests]
+            if (journey_type == "gift_purchase" and gift_interests
+                    and not known_slots.get("product_category")):
+                # Gift lane: recipient's interests drive the search, not the
+                # user's own profile and not a raw keyword match.
+                merch_cands, card_suggestion = await merchandise_service.search_gift_candidates(
+                    gift_interests, cards, active_card_id=effective_card_id)
+                search_term = ", ".join(gift_interests)
+                _recipient = known_slots.get("recipient_type")
+                if _recipient:
+                    for _c in merch_cands:
+                        _c.metadata = {**(_c.metadata or {}), "gift_for": _recipient}
+                    # Durable relationship memory — next gift ask for this person
+                    # starts from what we learned today.
+                    from services import personalization_service
+                    await personalization_service.remember_relationship(
+                        user_id, str(_recipient),
+                        interests=gift_interests, occasion=known_slots.get("occasion"))
+            else:
+                merch_cands, card_suggestion = await merchandise_service.search_merchandise_candidates(
+                    str(search_term), cards, active_card_id=effective_card_id)
             if merch_cands:
                 candidates = merch_cands
                 recommendations = [c.model_dump() for c in merch_cands]
@@ -843,11 +862,20 @@ async def generate_concierge_response(
                 else:
                     _fit = ("None of these fit your current balance yet — if you'd rather not wait, "
                             "an Amazon voucher can stretch what you have. ")
-                assistant_message = (confirmation_recap + " " if confirmation_recap else "") + (
-                    f"Straight from your rewards catalogue — real products you can order with points, no browsing. "
-                    f"My pick for “{search_term}”: {top.label} ({top.best_use_case}). {_fit}")
+                if journey_type == "gift_purchase" and gift_interests:
+                    _who = known_slots.get("recipient_type") or "them"
+                    _occ = f" for the {known_slots['occasion']}" if known_slots.get("occasion") else ""
+                    assistant_message = (confirmation_recap + " " if confirmation_recap else "") + gift_memory_note + (
+                        f"Since your {_who} loves {search_term}, I shopped the rewards catalogue with that in mind{_occ}. "
+                        f"My top gift pick: {top.label} ({top.best_use_case}). {_fit}")
+                    next_actions = ["review_recommendations", "redeem_best_option", "show_amazon_voucher_instead"]
+                    gift_voucher_chip = True
+                else:
+                    assistant_message = (confirmation_recap + " " if confirmation_recap else "") + (
+                        f"Straight from your rewards catalogue — real products you can order with points, no browsing. "
+                        f"My pick for “{search_term}”: {top.label} ({top.best_use_case}). {_fit}")
+                    next_actions = ["review_recommendations", "redeem_best_option"]
                 assistant_message += _card_switch_note(card_suggestion, known_slots)
-                next_actions = ["review_recommendations", "redeem_best_option"]
                 requires_confirmation = True
             else:
                 # Catalogue miss. Be honest, then give two real ways forward:
@@ -985,6 +1013,10 @@ async def generate_concierge_response(
             suggested_replies = _SLOT_CHIPS.get(missing_slots[0], [])
     elif show_switch_chips:
         suggested_replies = _switch_chips(switch_context_category)
+    elif gift_voucher_chip:
+        # Gift rec shown: the voucher fallback is a tap-away option, never a
+        # sentence tacked onto the reply.
+        suggested_replies = ["Show an Amazon voucher instead"]
     return {
         "conversation_id": str(conversation_id) if conversation_id is not None else None,
         "message": assistant_message,

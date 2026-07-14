@@ -1,6 +1,10 @@
 /* Rewards Catalogue: hardcoded, self-contained store data + a local intent
    engine the chat bubble runs over it. Points are a demo bucket, not the bank. */
 import { USERS } from "./api.js";
+// Real product photos for merchandise (curated by fetch-merch-images.mjs from
+// dummyjson's CDN, relevance-checked — only items dummyjson genuinely stocks
+// get a real photo; everything else keeps the guaranteed SVG tile below).
+import MERCH_PHOTOS from "./merch-images.json";
 
 /* Reward imagery: classify each reward to a keyword, pull a deterministic
    topical photo (slug-locked), fall back via <img onError>. */
@@ -196,6 +200,64 @@ const cashTile = (amount, label) => {
 /* A random petrol-station photo (for the "fuel wallet" cashback destination). */
 const fuelPhoto = (slug) => `https://loremflickr.com/320/220/gas,station?lock=${hashStr(slug || "fuel")}`;
 
+/* ------------------------------------------------------------------ */
+/* Merchandise tiles: guaranteed-render, on-brand product art.          */
+/* Third-party photo proxies (loremflickr/picsum) get silently          */
+/* ad-blocked in Brave/uBlock, leaving a blank card — the exact bug     */
+/* reported. Every merch item that isn't a recognized brand gets an     */
+/* inline SVG icon tile instead: zero network dependency, and it reads  */
+/* as bespoke product art rather than generic stock photography.       */
+/* ------------------------------------------------------------------ */
+const MERCH_ICON = [
+  [/headphone|airpods|buds|airdopes|earphone/, "🎧"],
+  [/camera|canon|gopro|dji|pixma/, "📷"],
+  [/vacuum|dyson v8/, "🧹"],
+  [/hair dryer|supersonic/, "💇"],
+  [/trimmer|shaver/, "🪒"],
+  [/iron|steamer/, "👔"],
+  [/coffee|nespresso/, "☕"],
+  [/air fryer|airfryer|instant pot|cooker|tawa|mixer|cookware|induction|microwave|oven|grinder/, "🍳"],
+  [/watch|fitbit|smartwatch|fossil|mi smart band|colorfit/, "⌚"],
+  [/tv|television|fire tv|echo/, "📺"],
+  [/laptop|ipad|kindle|tablet|printer|mouse/, "💻"],
+  [/speaker|jbl/, "🔊"],
+  [/power bank|charger|anker/, "🔋"],
+  [/sunglasses|ray-ban/, "🕶️"],
+  [/shoes|nike|adidas/, "👟"],
+  [/trolley|backpack|skybags|american tourister|duffel|boat bag|suitcase|luggage/, "🧳"],
+  [/purifier|cooler|heater|fan/, "🌬️"],
+  [/yoga|basketball|sport/, "🏀"],
+  [/grill|barbecue/, "🍖"],
+  [/flask|thermos|storage|glass|milton|borosil|dinner set|crockery/, "🍽️"],
+  [/water jet|dental|flosser/, "🦷"],
+  [/heating pad|massag/, "🌡️"],
+  [/sound|soundspa|white noise/, "🎵"],
+];
+const merchIcon = (name) => {
+  const n = (name || "").toLowerCase();
+  for (const [re, emoji] of MERCH_ICON) if (re.test(n)) return emoji;
+  return "🎁";
+};
+// Soft cream grounds with a rotating accent ring — light, premium, product-shot
+// feel that sits cleanly on the white cards (the earlier dark tiles read muddy).
+// The card already shows the product NAME, so the tile carries only the icon.
+const MERCH_ACCENTS = ["#FB7B54", "#16354D", "#D9A441", "#5F7D91"]; // coral, navy, gold, slate
+const merchTile = (item) => {
+  const emoji = merchIcon(item.name);
+  const accent = MERCH_ACCENTS[hashStr(item.slug || item.name || "") % MERCH_ACCENTS.length];
+  const gid = "g" + hashStr(item.slug || item.name || "tile");
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="220" viewBox="0 0 320 220">` +
+    `<defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">` +
+    `<stop offset="0" stop-color="#FBF7EE"/><stop offset="1" stop-color="#F1EADA"/></linearGradient></defs>` +
+    `<rect width="320" height="220" fill="url(#${gid})"/>` +
+    `<circle cx="160" cy="110" r="62" fill="#ffffff"/>` +
+    `<circle cx="160" cy="110" r="62" fill="none" stroke="${accent}" stroke-width="2.5" opacity="0.85"/>` +
+    `<text x="160" y="128" font-size="62" text-anchor="middle" dominant-baseline="middle">${emoji}</text>` +
+    `</svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+};
+
 /* Resolve the best visual for a reward:
    - cashback → a number tile (the ₹ cash returned), EMI adds an "EMI" label,
      the fuel-wallet destination gets a petrol-station photo, and wallet brands
@@ -221,6 +283,19 @@ export function visualFor(item) {
     return { image: tile, logo: false, logoAlt: null, photo: tile, slug: it.slug };
   }
 
+  if (it.category === "merchandise") {
+    // Real product photo where we have a genuinely relevant one (curated by
+    // fetch-merch-images.mjs, relevance-checked against dummyjson — never a
+    // guessed/wrong image). The tile is ALWAYS the fallback: it's a data: URI,
+    // so it can never be blocked and never blank, unlike the flickr/favicon
+    // proxies that left these cards empty in Brave/ad-blocked browsers.
+    const tile = merchTile(it);
+    const realPhoto = MERCH_PHOTOS[it.slug];
+    if (realPhoto) {
+      return { image: realPhoto, logo: false, logoAlt: null, photo: tile, slug: it.slug };
+    }
+    return { image: tile, logo: false, logoAlt: null, photo: tile, slug: it.slug };
+  }
   if (domain) {
     return { image: logoUrl(domain), logo: true, logoAlt: logoAltUrl(domain), photo, slug: it.slug };
   }
@@ -617,6 +692,61 @@ function occasionMerch(t, budget, n = 3) {
 const voucherFallbackItems = (budget) =>
   orderByBudget([itemById("gc-amazon"), ALL_ITEMS.find((i) => i.name === "Amazon Gift Card ₹5,000"), itemById("gc-flipkart")].filter(Boolean), budget);
 
+/* ---- gift concierge: recipient + their interests → real store products ----
+   Mirrors the backend gift_registry. A gift is shopped for the RECIPIENT's
+   interests, never the user's own lean, and leads with catalogue products —
+   the Amazon voucher is only a fallback, never the first answer. */
+const GIFT_RELATIONS =
+  /\b(mom|mother|mum|mommy|dad|father|daddy|papa|son|daughter|kid|kids|child|children|wife|husband|spouse|brother|sister|sibling|friend|bestie|grand\s?ma|grandmother|grand\s?pa|grandfather|granny|aunt|uncle|cousin|niece|nephew|girlfriend|boyfriend|partner|fianc|parents?|colleague|boss|teacher)\b/;
+/* normalize the matched word to a short, natural relation label */
+const relationLabel = (w) => {
+  const m = { mum: "mum", mommy: "mom", mother: "mom", daddy: "dad", papa: "dad", father: "dad",
+    spouse: "partner", sibling: "sibling", bestie: "best friend", granny: "grandmother" }[w];
+  return (m || w).replace(/\s+/g, "");
+};
+/* interest keyword → catalogue name needles (matched against store item names) */
+const GIFT_INTERESTS = [
+  [/cook|baking|bake|chef|kitchen|foodie|culinary/, ["cooker", "air fryer", "mixer", "cookware", "induction", "tawa", "instant pot", "microwave", "coffee", "grilling"], "cooking"],
+  [/coffee|espresso|barista|cafe/, ["coffee", "nespresso"], "coffee"],
+  [/music|audio|singing|songs|concert|audiophile/, ["headphones", "buds", "airdopes", "airpods", "speaker", "echo", "sony"], "music"],
+  [/fitness|gym|workout|running|jogging|yoga|sport|athlete|active/, ["fitbit", "band", "yoga", "shoes", "basketball", "apple watch", "smartwatch"], "fitness"],
+  [/photo|photography|camera|filming|vlog|content/, ["canon", "gopro", "dji", "pixma"], "photography"],
+  [/read|books|book|kindle|literature/, ["kindle"], "reading"],
+  [/tech|gadget|geek|computer|coding/, ["ipad", "laptop", "echo", "fire tv", "mouse", "power bank"], "tech"],
+  [/travel|trips|wanderlust|explor|adventure/, ["trolley", "backpack", "boat bag", "duffel", "flask", "sunglasses", "power bank"], "travel"],
+  [/movie|cinema|tv|series|binge|entertainment/, ["tv", "fire tv", "echo"], "movies"],
+  [/home|decor|cleaning|household/, ["dyson", "vacuum", "purifier", "air cooler", "fan", "iron", "storage"], "the home"],
+  [/wellness|spa|relax|self.?care|massage/, ["heating pad", "hair dryer", "trimmer"], "wellness"],
+  [/grooming|beard|shaving|skincare/, ["trimmer", "shaver", "hair dryer"], "grooming"],
+  [/fashion|style|watches?|accessor/, ["sunglasses", "watch", "fossil", "ray-ban"], "fashion"],
+  [/garden|outdoor|barbecue|bbq|grill/, ["grilling", "boat bag"], "the outdoors"],
+];
+/* extract every interest the message mentions → { needles, words } */
+function giftInterestsIn(t) {
+  const needles = [], words = [];
+  for (const [re, ns, label] of GIFT_INTERESTS) {
+    if (re.test(t)) { needles.push(...ns); words.push(label); }
+  }
+  return { needles: [...new Set(needles)], words: [...new Set(words)] };
+}
+/* store products matching the recipient's interests, budget-ordered */
+function giftMerchFor(needles, budget, persona, n = 4) {
+  const lower = needles.map((s) => s.toLowerCase());
+  const matches = ALL_ITEMS.filter(
+    (it) => it.category === "merchandise" && lower.some((s) => it.name.toLowerCase().includes(s)));
+  return orderByBudget(matches.filter((i) => visibleTo(i, persona)), budget).slice(0, n);
+}
+/* Detect a gift request: a recipient relation + a gifting cue (the word gift/
+   present/surprise, an occasion, or "for my <relation>"). Excludes plain
+   "gift card"/"voucher" asks — those stay in the gift-card lane. */
+function detectGift(t) {
+  if (/\bgift\s*cards?\b|\bvoucher\b|\be-?gift\b/.test(t)) return null;
+  const rel = t.match(GIFT_RELATIONS);
+  const cue = /\bgift|present|surprise|birthday|anniversary|wedding|graduation|diwali|christmas|rakhi|festival\b/.test(t);
+  if (!rel || !cue) return null;
+  return { relation: relationLabel(rel[1]), ...giftInterestsIn(t) };
+}
+
 /* Signals that clearly belong to a DIFFERENT intent than trip-planning — a
    product, a gift card, cashback, etc. A bare destination correction ("actually
    Dubai") deliberately does NOT match, so it stays in the trip flow. */
@@ -957,6 +1087,33 @@ export function runConcierge(rawMessage, ctx) {
     }
   }
 
+  /* ---------- active gift journey: we asked what the recipient likes, this
+     message is the answer → map the interest to real store products. */
+  if (flow && flow.journey === "gift") {
+    const relation = flow.data.relation || "them";
+    const { needles, words } = giftInterestsIn(t);
+    if (!needles.length) {
+      // still no interest we recognise → offer the flexible voucher, honestly.
+      const vouchers = vis(voucherFallbackItems(budget));
+      return {
+        reply: `No worries — if you're not sure what your ${relation} is into, an Amazon voucher lets them pick exactly what they'd love:${budgetNote(vouchers, budget)}`,
+        items: vouchers, chips: ["Best value for my points", "What's in merchandise?"], flow: null,
+      };
+    }
+    const items = vis(giftMerchFor(needles, budget, persona));
+    if (!items.length) {
+      const vouchers = vis(voucherFallbackItems(budget));
+      return {
+        reply: `The store doesn't stock a ${words[0]} gift in your range right now — an Amazon voucher is the clean way to get your ${relation} exactly that:${budgetNote(vouchers, budget)}`,
+        items: vouchers, chips: ["Best value for my points", "What's in merchandise?"], flow: null,
+      };
+    }
+    return {
+      reply: `Perfect — since your ${relation} loves ${words.join(" & ")}, here's what I'd gift from the rewards store, priced in points:${budgetNote(items, budget)}`,
+      items, chips: ["Show an Amazon voucher instead", "Best value for my points"], flow: null,
+    };
+  }
+
   /* ---------- "tell me more" about the proactive pick ---------- */
   if (has(t, "tell me more", "more about", "know more", "the pick", "your suggestion") ||
       (t === "yes" || t === "yes please" || t === "sure")) {
@@ -1020,6 +1177,43 @@ export function runConcierge(rawMessage, ctx) {
       reply: "Happy to book you a real flight! Where do you want to fly to?",
       items: [], chips: ["Goa", "Delhi", "Dubai", "Mumbai"],
       flow: { journey: "flight", slot: "destination", data: {} },
+    };
+  }
+
+  /* ---------- gift concierge: a gift FOR someone. Checked before travel/merch
+     so "gift for mum who loves cooking/travel" is shopped as a gift, not hijacked
+     by the interest keyword. Leads with real store products for the recipient's
+     interest; asks what they like if none was given. Voucher is only a fallback. */
+  const gift = detectGift(t);
+  if (gift) {
+    if (!gift.needles.length) {
+      return {
+        reply: `Lovely idea — a gift for your ${gift.relation}! What are they into? Tell me an interest and I'll pick something they'll actually love from the rewards store.`,
+        items: [],
+        chips: ["Cooking", "Music", "Fitness", "Tech"],
+        flow: { journey: "gift", slot: "interest", data: { relation: gift.relation } },
+      };
+    }
+    const items = vis(giftMerchFor(gift.needles, budget, persona));
+    if (!items.length) {
+      const vouchers = vis(voucherFallbackItems(budget));
+      return {
+        reply: `For a ${gift.words[0]}-lover the store's a little thin in your range right now — an Amazon voucher lets your ${gift.relation} pick exactly what they want:${budgetNote(vouchers, budget)}`,
+        items: vouchers, chips: ["Best value for my points", "What's in merchandise?"], flow: null,
+      };
+    }
+    return {
+      reply: `Great — since your ${gift.relation} loves ${gift.words.join(" & ")}, here's what I'd gift from the rewards store, priced in points:${budgetNote(items, budget)}`,
+      items, chips: ["Show an Amazon voucher instead", "Best value for my points"], flow: null,
+    };
+  }
+
+  /* "Show an Amazon voucher instead" chip → the honest flexible fallback. */
+  if (has(t, "amazon voucher instead", "show an amazon voucher", "voucher instead")) {
+    const vouchers = vis(voucherFallbackItems(budget));
+    return {
+      reply: `Here's the flexible route — an Amazon voucher your recipient can spend on anything:${budgetNote(vouchers, budget)}`,
+      items: vouchers, chips: ["Best value for my points", "What's in merchandise?"], flow: null,
     };
   }
 

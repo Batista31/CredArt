@@ -89,6 +89,37 @@ async def update_memory(
     return await get_user_memory(user_id)
 
 
+async def remember_relationship(
+    user_id: str, relation: str, *,
+    interests: list[str] | None = None,
+    occasion: str | None = None,
+    last_gift: str | None = None,
+) -> dict:
+    """Accumulate durable facts about someone the user gifts for
+    ("son likes cars") under structured_preferences.relationships.<relation>.
+    Additive — new interests merge, never overwrite."""
+    mem = await get_user_memory(user_id)
+    sp = dict(mem.get("structured_preferences") or {})
+    rels = dict(sp.get("relationships") or {})
+    entry = dict(rels.get(relation) or {})
+    if interests:
+        entry["interests"] = sorted({*entry.get("interests", []), *interests})
+    if occasion:
+        entry["occasions"] = sorted({*entry.get("occasions", []), occasion})
+    if last_gift:
+        entry["last_gift"] = last_gift
+    rels[relation] = entry
+    sp["relationships"] = rels
+    await update_memory(user_id, structured_preferences=sp)
+    return entry
+
+
+async def relationship_profile(user_id: str, relation: str) -> dict | None:
+    """Stored facts about a gift recipient, or None if we know nothing yet."""
+    mem = await get_user_memory(user_id)
+    return ((mem.get("structured_preferences") or {}).get("relationships") or {}).get(relation)
+
+
 async def update_preferences(user_id: str, payload: dict) -> dict | None:
     updates = {k: v for k, v in payload.items() if k in _ALLOWED_PREF_FIELDS}
     if not updates:

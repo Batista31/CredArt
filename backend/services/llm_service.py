@@ -68,11 +68,16 @@ Rules:
 - journey_type: choose the closest real-world journey. IMPORTANT:
   * buying a physical product/gadget/merchandise with points (phone, laptop, headphones,
     watch, appliance, phone stand, shoes, anything orderable) → product_purchase
-  * a gift for someone → gift_purchase
-  * a brand voucher/gift card (Amazon, Swiggy, Flipkart) → voucher_redemption
+  * anything FOR another person (mother, son, wife, friend...) → gift_purchase — even
+    if the word "gift" also suggests a gift card. The recipient wins.
+  * a brand voucher/gift card for the USER THEMSELVES (Amazon, Swiggy, Flipkart),
+    no recipient mentioned → voucher_redemption
   * flights/"fly"/airport → travel_flight; hotels/stay/resort → travel_hotel
   * only use general_reward_advice when the user is vague with no concrete goal
 - slots: extract any clearly stated structured details. Common keys: origin, destination, departure_window (date or "this weekend"), passengers, cabin_class, check_in_window, nights, guests, room_type, style, budget, required_products, recipient_type, occasion, goal
+- gift_purchase slots: recipient_type (relation word: mother, son, wife, friend...),
+  occasion (birthday, anniversary...), recipient_interests (list of interest words the
+  user states about the recipient, e.g. "she likes cooking" → ["cooking"])
 - origin/destination: city names as-is (don't convert to IATA codes)
 - departure_window: any date expression ("28th June", "this weekend", "next Friday", "2026-06-28")
 """
@@ -233,7 +238,10 @@ Rules:
 - travel_flight needs: origin (IATA or city), destination (IATA or city), depart_date
 - travel_hotel needs: destination, check_in date, number of nights
 - home_setup needs: room_type or required_products
-- product_purchase / gift_purchase needs: what item, budget or points range
+- product_purchase needs: what item, budget or points range
+- gift_purchase needs: recipient_type plus EITHER recipient_interests OR an item.
+  If both recipient and an interest are known, mark complete — the engine maps
+  interests to products itself. Never ask for budget first on gifts.
 - transfer_partner_redemption needs: a goal (best value / specific airline). Once a
   goal or airline preference is known, mark complete — the candidates ARE the answer.
 - general_reward_advice / card_benefit_lookup: always complete — no follow-up
