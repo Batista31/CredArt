@@ -15,6 +15,7 @@ import React from "react";
 import { api } from "../lib/api.js";
 import { travelApi } from "../lib/travelApi.js";
 import { KobieAvatar } from "./Kobie.jsx";
+import { FlightOtpStep } from "./travel/FlightOtpStep.jsx";
 import { runConcierge, greetingFor, CHAT_CHIPS, CATEGORY_META, fmtPts, onImgError, rewardImgStyle, unusedVouchers, markVoucherUsed } from "../lib/catalogue.js";
 
 const fmt = (n) => Number(n).toLocaleString("en-IN");
@@ -264,6 +265,11 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
   const [busy, setBusy] = React.useState(false);
   const [input, setInput] = React.useState("");
   const [flow, setFlow] = React.useState(null);
+  // OTP gate for in-chat flight bookings — flightOtp holds the offer awaiting a
+  // code (null = overlay closed); flightOtpRef holds the demo code we issued.
+  const [flightOtp, setFlightOtp] = React.useState(null);
+  const [flightOtpErr, setFlightOtpErr] = React.useState(null);
+  const flightOtpRef = React.useRef(null);
   const [sessionId, setSessionId] = React.useState(null);
   const [conversationId, setConversationId] = React.useState(null);
   // Holds the saved transcript while we wait for the user to pick "continue" vs
@@ -441,6 +447,13 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
     if (local.reply != null) {
       // Local engine handled it — coherent reply + real catalogue cards.
       push({ who: "bot", text: local.reply, items: local.items || [], chips: local.chips || [] });
+      // A confirmed voucher-gated order (food journey) signals an email receipt —
+      // fire-and-forget, never blocks the chat reply already shown.
+      if (local.emailReceipt) {
+        api.redemptionEmail(persona.name, local.emailReceipt.items,
+          { totalNote: local.emailReceipt.totalNote, totalPoints: local.emailReceipt.totalPoints },
+          null, "chat").catch(() => { /* best-effort — reply already confirmed the order */ });
+      }
       setBusy(false);
       return;
     }
@@ -471,14 +484,12 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
     sendText(c);
   }
 
-  /* Real Duffel test order (real PNR) on demo credits → order history + invoice.
-     Mirror the spend onto the store header. */
-  async function handleBookFlight(offer) {
-    if (busy) return;
-    // Budget honesty at the moment of commitment: the effective cost (fare
-    // minus any applied airline voucher) must fit the VISIBLE store balance.
-    // A 2-ticket fare the user can't afford is rejected right here with the
-    // exact shortfall — never after a fake booking spinner.
+  /* Tapping Book does NOT book — it opens the OTP gate first, exactly like the
+     Travel page's review screen. Affordability is still checked here, BEFORE we
+     ask for a code, so the user is never sent through OTP only to be told they
+     can't afford it. confirmFlightBooking() is what actually spends points. */
+  function handleBookFlight(offer) {
+    if (busy || flightOtp) return;
     const effCost = offer.voucher ? offer.effective_points : offer.points_required;
     const spendable = Math.max(0, balRef.current - cartRef.current);
     if (effCost > spendable) {
@@ -487,6 +498,16 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
         chips: ["Book a flight", "Show me travel options"] });
       return;
     }
+    flightOtpRef.current = String(Math.floor(100000 + Math.random() * 900000));
+    setFlightOtpErr(null);
+    setFlightOtp(offer);
+  }
+
+  /* Real Duffel test order (real PNR) on demo credits → order history + invoice.
+     Mirror the spend onto the store header. Only reached after a correct OTP. */
+  async function confirmFlightBooking(offer) {
+    if (busy) return;
+    const effCost = offer.voucher ? offer.effective_points : offer.points_required;
     setBusy(true);
     const mode = "points";
     try {
@@ -743,6 +764,29 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
             </div>
           </div>
         </div>
+      )}
+
+      {/* OTP gate for an in-chat flight booking — same overlay the Travel page
+          uses, so booking from chat is step-up secured exactly like booking from
+          the full page. Points move only after the right code is entered. */}
+      {flightOtp && (
+        <FlightOtpStep offer={flightOtp} demoOtp={flightOtpRef.current} error={flightOtpErr}
+          onSubmit={(code) => {
+            if (code !== flightOtpRef.current) {
+              setFlightOtpErr("That OTP didn't match. Check the SMS and try again.");
+              return;
+            }
+            const offer = flightOtp;
+            setFlightOtp(null);
+            setFlightOtpErr(null);
+            confirmFlightBooking(offer);
+          }}
+          onCancel={(msg) => {
+            setFlightOtp(null);
+            setFlightOtpErr(null);
+            push({ who: "bot", text: `${msg} Your flight wasn't booked — want to try again?`,
+              chips: ["Book a flight", "Show me travel options"] });
+          }} />
       )}
     </>
   );

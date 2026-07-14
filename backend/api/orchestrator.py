@@ -50,7 +50,15 @@ def _expiry_phrase(days: int | None) -> str:
     return f"in {days} days"
 
 
-async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> tuple[list[Candidate], list[ToolCall], dict]:
+async def orchestrate(
+    intent: Intent, user: dict | None, cards: list[dict],
+    completeness_ctx: dict | None = None,
+) -> tuple[list[Candidate], list[ToolCall], dict]:
+    """completeness_ctx ({"intent": dict, "history": [...]}, from the dialogue
+    manager) switches the reply step to ONE combined LLM call that both checks
+    slot completeness and writes the reply — meta then carries is_complete /
+    follow_up_question. Without it, the plain rerank reply is used (always
+    complete), as before."""
     # Still gathering intent — skip candidate assembly and return the follow-up question.
     if not intent.is_complete:
         question = intent.follow_up_question or "Could you tell me a bit more?"
@@ -244,13 +252,26 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
 
     llm_reply = None
     llm_used = False
+    is_complete = True
+    follow_up_question = None
     if candidates:
         try:
-            from services.llm_service import llm_rerank_reply
-            llm_reply, llm_used = await llm_rerank_reply(
-                candidates[:8], user.get("name", ""), intent.query)
+            if completeness_ctx:
+                from services.llm_service import llm_reply_with_completeness
+                is_complete, follow_up_question, llm_reply, llm_used = (
+                    await llm_reply_with_completeness(
+                        candidates[:8], user.get("name", ""), intent.query,
+                        completeness_ctx.get("intent") or {},
+                        completeness_ctx.get("history") or []))
+                if not is_complete and not follow_up_question:
+                    is_complete = True  # incomplete without a question is unusable — show recs
+            else:
+                from services.llm_service import llm_rerank_reply
+                llm_reply, llm_used = await llm_rerank_reply(
+                    candidates[:8], user.get("name", ""), intent.query)
         except Exception as exc:
-            print(f"[orchestrator] LLM rerank failed ({exc}), using template")
+            print(f"[orchestrator] LLM reply failed ({exc}), using template")
+            is_complete, follow_up_question = True, None
 
     reply = llm_reply or _templated_reply(intent, user, candidates, soonest)
 
@@ -265,6 +286,8 @@ async def orchestrate(intent: Intent, user: dict | None, cards: list[dict]) -> t
     meta = {
         "soonest_expiry": soonest[0]["card_id"] if soonest else None,
         "llm_used": llm_used,
+        "is_complete": is_complete,
+        "follow_up_question": follow_up_question,
     }
     return candidates[:8], trace, {"reply": reply, **meta}
 

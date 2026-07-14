@@ -305,6 +305,12 @@ export function RewardsCheckout({ persona, cart: cartProp, performCheckout, onDo
       await sleep(600);
       markDone(otpAfter + 2);
       setResult({ ...r, refs });
+      // Confirmation email — fire-and-forget, never blocks the success screen.
+      api.redemptionEmail(
+        persona.name,
+        cart.map((it) => ({ name: it.name, points: it.points, qty: it.qty || 1 })),
+        { totalPoints: r.total }, r.balanceAfter, "store",
+      ).catch(() => { /* best-effort — success screen already shows the refs */ });
       await sleep(350);
       setPhase("success");
     })();

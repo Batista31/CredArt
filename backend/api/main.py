@@ -23,6 +23,7 @@ from services import (
     cmr_service,
     conversation_service,
     db,
+    email_service,
     embeddings_service,
     recommendation_session_service,
     scoring_service,
@@ -189,6 +190,54 @@ async def get_concierge_history(session_id: str):
         "conversation_id": session.get("concierge_conversation_id"),
         "messages": session.get("concierge_messages", []),
     }
+
+
+class ConciergeRedemptionItem(BaseModel):
+    name: str
+    qty: int = 1
+    points: int | None = None     # points-denominated (store cart)
+    note: str | None = None       # free-text value override (e.g. "₹900 via voucher")
+    ref: str | None = None
+
+
+class ConciergeRedemptionEmailRequest(BaseModel):
+    persona_name: str
+    items: list[ConciergeRedemptionItem]
+    total_points: int | None = None
+    total_note: str | None = None
+    balance_after: int | None = None
+    source: str = "store"  # "store" (cart checkout) | "chat" (bubble food/flight order)
+
+
+@app.post("/concierge/redemption-email")
+async def concierge_redemption_email(req: ConciergeRedemptionEmailRequest):
+    """Confirmation email for the Rewards Catalogue store checkout and the
+    CredArt chatbot's own redemptions (voucher-gated food orders, cart
+    checkout triggered from chat) — these never touch the bank's Postgres
+    ledger, so this is the only place a confirmation gets sent for them.
+    Best-effort: never raises, never blocks the redemption that already
+    completed client-side."""
+    def _value(it: ConciergeRedemptionItem) -> str:
+        if it.note:
+            return it.note
+        return f"{(it.points or 0):,} pts"
+
+    rows = [(f"{it.name}{f' × {it.qty}' if it.qty > 1 else ''}" + (f" ({it.ref})" if it.ref else ""), _value(it))
+            for it in req.items]
+    if req.total_note:
+        rows.append(("Total", req.total_note))
+    elif req.total_points is not None:
+        rows.append(("Total redeemed", f"{req.total_points:,} pts"))
+    if req.balance_after is not None:
+        rows.append(("Points balance after", f"{req.balance_after:,} pts"))
+    sent = await email_service.send_redemption_email(
+        subject=f"CredArt Rewards — redemption confirmed for {req.persona_name}",
+        title="CredArt Rewards — Redemption confirmed 🎉",
+        subtitle=f"{req.persona_name}'s redemption is complete. This is your confirmation.",
+        rows=rows,
+        footer="Rewards Catalogue — a self-contained demo points bucket, never the bank ledger.",
+    )
+    return {"email_sent": sent}
 
 
 @app.post("/redeem", response_model=RedeemResponse)

@@ -1284,6 +1284,12 @@ export function runConcierge(rawMessage, ctx) {
       return {
         reply: `✅ Order placed with your ${voucher.name}: ${qty} × ${d.item.name} (₹${total.toLocaleString("en-IN")} of ₹${cap.toLocaleString("en-IN")} covered). Your redemption code is ${code} — issued the same way the bank world issues Tango vouchers. Enjoy! 🍽️`,
         items: [], chips: ["Show dining options", "Best value for my points"], flow: null,
+        // Signal for the bubble to fire a confirmation email — runConcierge itself
+        // is pure/sync and never calls the backend directly.
+        emailReceipt: {
+          items: [{ name: d.item.name, qty, note: `₹${(d.item.price).toLocaleString("en-IN")} each`, ref: code }],
+          totalNote: `₹${total.toLocaleString("en-IN")} (via ${voucher.name})`,
+        },
       };
     }
   }

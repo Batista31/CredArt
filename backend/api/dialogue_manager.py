@@ -59,6 +59,7 @@ _TRANSIENT_SLOTS = frozenset({
     "product_category", "required_products", "item", "recipient_type", "occasion",
     "destination", "origin", "departure_window", "return_date", "check_in_window",
     "nights", "guests", "passengers", "cabin_class", "voucher_type", "topic", "goal", "budget",
+    "brand",
 })
 
 _SLOT_QUESTIONS = {
@@ -351,7 +352,8 @@ def _detect_card_switch(message: str, cards: list[dict]) -> str | None:
     return None
 
 
-async def _orchestrate_scoped(intent: Any, user: dict, cards: list[dict], active_card_id: str | None):
+async def _orchestrate_scoped(intent: Any, user: dict, cards: list[dict], active_card_id: str | None,
+                              completeness_ctx: dict | None = None):
     """orchestrate(), scoped to the opened card, with a same-consistency fallback.
 
     Tries the active card only first (so candidates and the LLM reply agree on which
@@ -360,9 +362,9 @@ async def _orchestrate_scoped(intent: Any, user: dict, cards: list[dict], active
     a one-line note so the user knows why a different card showed up.
     """
     scoped_cards = _orchestrate_card_scope(cards, active_card_id, intent.card_id)
-    candidates, trace, meta = await orchestrate(intent, user, scoped_cards)
+    candidates, trace, meta = await orchestrate(intent, user, scoped_cards, completeness_ctx=completeness_ctx)
     if not candidates and scoped_cards is not cards:
-        candidates, trace, meta = await orchestrate(intent, user, cards)
+        candidates, trace, meta = await orchestrate(intent, user, cards, completeness_ctx=completeness_ctx)
         if candidates:
             active_name = next((c["card_name"] for c in cards if c["card_id"] == active_card_id), "that card")
             meta = {**meta, "reply": meta["reply"] + f" (Nothing matched on your {active_name}, so I checked your other cards too.)"}
@@ -471,38 +473,31 @@ def _switch_chips(current_category: str | None) -> list[str]:
     return [c for c in base if c != keep]
 
 
-async def _llm_postcandidate_check(
+def _completeness_ctx(
     journey_type: str,
     intent: Any,
     history: list[dict],
-    candidates: list[dict],
     known_slots: dict | None = None,
-) -> tuple[bool, str | None]:
-    """Second LLM round: given the fetched candidates, ask one more question if needed.
-
-    Returns (is_complete, follow_up_question). Defaults to (True, None) on any error so
-    the loop never blocks on LLM failure — we fall through to showing recommendations.
+) -> dict | None:
+    """Context for orchestrate()'s combined reply+completeness LLM call, or None
+    when this journey should never ask a follow-up. Replaces the old second LLM
+    round (_llm_postcandidate_check) — the check now rides along with the reply call.
     """
-    if journey_type in _NEVER_FOLLOWUP_JOURNEYS or not candidates:
-        return True, None
-    try:
-        from services.llm_service import llm_check_completeness
-        intent_dict = intent.model_dump() if hasattr(intent, "model_dump") else dict(intent)
-        # Merge known_slots into the intent dict so the LLM sees all accumulated context,
-        # not just what was extracted from the current message alone.
-        if known_slots:
-            intent_dict["slots"] = {**intent_dict.get("slots", {}), **known_slots}
-            # Promote top-level flight fields if still null
-            if not intent_dict.get("origin"):
-                intent_dict["origin"] = known_slots.get("origin")
-            if not intent_dict.get("destination"):
-                intent_dict["destination"] = known_slots.get("destination")
-            if not intent_dict.get("depart_date"):
-                intent_dict["depart_date"] = known_slots.get("departure_window")
-        return await llm_check_completeness(intent_dict, history, candidates=candidates)
-    except Exception as exc:
-        print(f"[dialogue] post-candidate LLM check failed ({exc}), showing recommendations")
-        return True, None
+    if journey_type in _NEVER_FOLLOWUP_JOURNEYS:
+        return None
+    intent_dict = intent.model_dump() if hasattr(intent, "model_dump") else dict(intent)
+    # Merge known_slots into the intent dict so the LLM sees all accumulated context,
+    # not just what was extracted from the current message alone.
+    if known_slots:
+        intent_dict["slots"] = {**intent_dict.get("slots", {}), **known_slots}
+        # Promote top-level flight fields if still null
+        if not intent_dict.get("origin"):
+            intent_dict["origin"] = known_slots.get("origin")
+        if not intent_dict.get("destination"):
+            intent_dict["destination"] = known_slots.get("destination")
+        if not intent_dict.get("depart_date"):
+            intent_dict["depart_date"] = known_slots.get("departure_window")
+    return {"intent": intent_dict, "history": history}
 
 
 def _orchestrate_card_scope(cards: list[dict], active_card_id: str | None, requested_card_id: str | None) -> list[dict]:
@@ -606,7 +601,21 @@ async def generate_concierge_response(
         and intent.kind not in ("greeting", "check_expiry", "unknown")
     ):
         journey_type = "travel_flight"
-    known_slots = _merge_slots(existing_state.get("known_slots") or {}, intent.slots)
+    # Explicit mid-chat journey switch ("forget the flight, get me a voucher"):
+    # purge the old journey's request-specific slots so they can't leak into the
+    # new journey's search or slot-filling. Slots the NEW journey also uses
+    # (e.g. destination when switching flight→hotel) survive; only an explicit
+    # switch signalled by the fresh intent triggers this — follow-up answers and
+    # planner re-routes keep their gathered context.
+    _prior_slots = existing_state.get("known_slots") or {}
+    _prev_journey = existing_state.get("journey_type")
+    if intent.journey_type and _prev_journey and intent.journey_type != _prev_journey:
+        _new_spec = _JOURNEY_SLOTS.get(intent.journey_type, {})
+        _keep = set(_new_spec.get("required", [])) | set(_new_spec.get("optional", []))
+        _prior_slots = {k: v for k, v in _prior_slots.items()
+                        if k not in _TRANSIENT_SLOTS or k in _keep}
+        _prior_slots.pop("_planner_questions_asked", None)  # new journey may plan afresh
+    known_slots = _merge_slots(_prior_slots, intent.slots)
     # NOTE: deliberately NOT merging in `memory.structured_preferences` here.
     # remember_conversation() persists each conversation's raw known_slots verbatim —
     # literal one-off answers ("no just give me any"), not curated preferences — so
@@ -703,6 +712,10 @@ async def generate_concierge_response(
     candidates = []
     requires_confirmation = False
     memory_updates: list[str] = []
+    # True only when the reply the user sees was actually written by the LLM. The
+    # planner/merchandise/journey routes below write deterministic copy, so they leave
+    # this False — it's the orchestrate path that can flip it.
+    llm_used = False
 
     # --- Context-gathering: the Query Generator plans natural questions for exploratory
     #     journeys (travel, merchandise, gifts) before we recommend; the static slot check
@@ -912,14 +925,19 @@ async def generate_concierge_response(
                 next_actions = ["compare_options", "redeem_best_option"]
                 requires_confirmation = True
             else:
-                legacy_candidates, trace, meta = await _orchestrate_scoped(intent, user, cards, effective_card_id)
+                # Non-planned journeys keep the post-candidate follow-up ability, but it
+                # now rides along with the reply call inside orchestrate (one LLM round,
+                # not two) — completeness_ctx enables it.
+                ctx = None if use_planner else _completeness_ctx(
+                    journey_type, intent, conv_history_dicts, known_slots=known_slots)
+                legacy_candidates, trace, meta = await _orchestrate_scoped(
+                    intent, user, cards, effective_card_id, completeness_ctx=ctx)
                 candidates = legacy_candidates
                 tool_trace = [t.model_dump() for t in trace]
                 recommendations = [c.model_dump() for c in legacy_candidates]
                 if not use_planner:
-                    # Non-planned journeys keep the original post-candidate LLM follow-up loop.
-                    is_complete, llm_followup = await _llm_postcandidate_check(
-                        journey_type, intent, conv_history_dicts, recommendations, known_slots=known_slots)
+                    is_complete = meta.get("is_complete", True)
+                    llm_followup = meta.get("follow_up_question")
                     if not is_complete and llm_followup:
                         response_type = "follow_up_question"
                         assistant_message = llm_followup
@@ -928,6 +946,7 @@ async def generate_concierge_response(
                 if response_type != "follow_up_question":
                     response_type = "recommendation" if legacy_candidates else "general_answer"
                     assistant_message = (confirmation_recap + " " if confirmation_recap else "") + meta["reply"]
+                    llm_used = bool(meta.get("llm_used"))
                     next_actions = ["compare_options", "check_transfer_partner", "redeem_best_option"] if legacy_candidates else ["clarify_goal"]
 
     # Personalized lead-in when we leaned into a category with NO user click — makes the
@@ -1000,6 +1019,6 @@ async def generate_concierge_response(
         "intent": intent,
         "candidates": candidates,
         "tool_trace": tool_trace,
-        "llm_used": False,
+        "llm_used": llm_used,
         "recommendation_session_id": str(rec_session["id"]) if rec_session.get("id") else None,
     }
