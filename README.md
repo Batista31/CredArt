@@ -1,96 +1,113 @@
-# CredArt — AI rewards concierge
+  # CredArt — AI rewards concierge
 
-CredArt turns a chat message into a **pre-validated set of redemption candidates**
-and a helpful reply, guaranteeing every number it shows is real (from a catalogue
-+ the user's own data), never invented by the LLM. It now spans **three rewards
-worlds** behind one concierge:
+  CredArt turns a chat message into a **pre-validated set of redemption candidates**
+  and a helpful reply, guaranteeing every number it shows is real (from a catalogue
+  + the user's own data), never invented by the LLM.
 
-| World | Client | Theme | Backend router |
-|-------|--------|-------|----------------|
-| **Banks** | HDFC credit cards | Navy + Gold | `/chat`, `/redeem`, … |
-| **Food & Dining** | Subway | Green + Yellow | `/dining/*` |
-| **Entertainment & Cinema** | Cinema / OTT (TMDB) | Deep Purple + Red | `/entertainment/*` |
+  The main experience is the **Rewards Catalogue** — a Kobie/Navy-Federal-style
+  points store with a floating CredArt chatbot on top. Three more rewards worlds
+  (Banks, Food & Dining, Entertainment) are reachable from its landing page for
+  demo purposes, each its own self-contained concierge.
 
-A landing page lets you pick a world; each opens its own themed concierge chat.
-A global **laptop ⇄ mobile** toggle renders the whole app inside a phone frame.
+  ## The Rewards Catalogue (main experience)
 
-> Architecture, the anti-hallucination boundary, CMR, dialogue engine, fulfilment
-> partners, and demo personas are documented in [`DEMO_RUNBOOK.md`](./DEMO_RUNBOOK.md).
+  `Login → Landing → Store` (+ a dedicated `Travel` flow), full desktop web app,
+  no device-frame toggle:
 
-## Layout
+  - **Store** — 200+ hardcoded rewards across Travel / Gift Cards / Cashback /
+    Merchandise, cart with quantity steppers, budget honesty at every layer (grid
+    badge, detail modal, chat cards, cart gate), OTP-secured checkout.
+  - **CredArt chatbot** (the floating bubble) — one question at a time, resizable
+    panel, autosaved + resumable chat history, category quick-switch, and a full
+    local intent engine (`lib/catalogue.js`) that:
+    - searches the **entire** catalogue by name/category/topical-keyword and
+      explains *why* a pick surfaced (`searchCatalogue` / `whyPick`) — never a
+      guess, always derived from the actual match + the user's spendable budget
+    - runs **dynamic lifestyle weighting**: every checkout nudges the redeemed
+      category's weight up and decays the rest (mirrors the bank world's
+      `update_preferences_after_redemption`), so a vague "how should I spend my
+      points?" genuinely drifts toward wherever the user actually redeems
+    - gates two features behind a **voucher wallet**: redeeming an airline
+      voucher (IndiGo, SpiceJet, Vistara…) unlocks live Duffel flight booking
+      in chat with the voucher's points applied to matching fares; redeeming a
+      dining voucher (Zomato, Swiggy, Taj…) unlocks a conversational food-order
+      flow (cuisine → party size → dish → confirm), both with budget honesty
+      against the voucher's value and mid-conversation intent switching
+    - books real flights via live Duffel search, OTP-gated the same way as
+      every other redemption in the app
+  - **Travel page** — dedicated search/results/review/booking flow: live Duffel
+    fares, hotels/cars/holiday packages (real catalogue rewards, budget-gated
+    Reserve), an order-history ("My bookings") panel, and OTP confirmation.
+  - **Confirmation emails** — every redemption (store cart checkout regardless
+    of category, chat food orders, chat/Travel-page flight bookings, travel
+    extras) sends a confirmation email via `backend/services/email_service.py`
+    (SMTP configured in `backend/.env`); best-effort, never blocks a redemption.
 
-```text
-CredArt/
-├─ backend/            FastAPI app (port 8001)
-│  ├─ api/             routes, schemas, intent, dialogue_manager,
-│  │                   dining.py + entertainment.py (self-contained routers)
-│  ├─ services/        Layer 1 — SQL + business logic + scoring + LLM + fulfilment
-│  ├─ .env             secrets (not committed) · .env.example is the template
-│  └─ .venv/
-├─ db/                 Prisma schema mirror + migrations + demo reset
-├─ frontend/           React + Vite (port 5173)
-│  └─ src/
-│     ├─ App.jsx           landing router + laptop/mobile toggle
-│     ├─ theme.jsx         per-category palettes (CSS-var overrides) + meta
-│     ├─ lib/api.js        backend client (bank + dining + entertainment)
-│     └─ components/       Landing, CategoryChat, BankExperience, Concierge, …
-└─ README.md
-```
+  ## Other rewards worlds (demo, reachable from the landing page)
 
-## Prerequisites
+  | World | Client | Theme | Backend router |
+  |-------|--------|-------|----------------|
+  | **Banks** | HDFC credit cards | Navy + Gold | `/chat`, `/redeem`, … |
+  | **Food & Dining** | Subway | Green + Yellow | `/dining/*` |
+  | **Entertainment & Cinema** | Cinema / OTT (TMDB) | Deep Purple + Red | `/entertainment/*` |
 
-- Python 3.11+ (a `backend/.venv` is expected), Node 18+.
-- `backend/.env` — copy from `backend/.env.example` and fill in what you need.
-  Everything is optional for the demo (services degrade gracefully), but for the
-  full experience set the Groq/Gemini LLM keys, `REDIS_URL`, and `TMDB_API_KEY`
-  (free — themoviedb.org → Settings → API → v3 key; enables real now-playing
-  movies with posters in the Entertainment concierge).
+  Each is a **self-contained router** — shares no tables, services, or session
+  state with the others, so it can't break them.
 
-## Run
+  ## Layout
 
-```powershell
-# 1. reset both bank demo personas (run before a bank demo)
-backend\.venv\Scripts\python db\run_reset.py
+  ```text
+  CredArt/
+  ├─ backend/                    FastAPI app (port 8001)
+  │  ├─ api/
+  │  │  ├─ main.py               bank /chat, /redeem, /cmr/*, /concierge/* (history + redemption email)
+  │  │  ├─ travel.py             live Duffel search/redeem/orders + invoice email (self-contained)
+  │  │  ├─ dining.py             Subway concierge (self-contained)
+  │  │  └─ entertainment.py      TMDB + rewards concierge (self-contained)
+  │  ├─ services/                Layer 1 — SQL + scoring + LLM + fulfilment + email_service.py
+  │  ├─ .env                     secrets (not committed) · .env.example is the template
+  │  └─ .venv/
+  ├─ db/                         Prisma schema mirror + migrations + demo reset
+  ├─ frontend/                   React + Vite (port 5173)
+  │  └─ src/
+  │     ├─ App.jsx               login → landing → store/travel (+ other worlds), no toggle
+  │     ├─ theme.jsx             per-world palettes (CSS-var overrides) + meta
+  │     ├─ lib/
+  │     │  ├─ api.js             backend client (bank + concierge history/email + dining + entertainment)
+  │     │  ├─ travelApi.js       Travel-world backend client
+  │     │  └─ catalogue.js       hardcoded catalogue + local CredArt intent engine (vouchers, weighting, search)
+  │     └─ components/
+  │        ├─ RewardsLogin/Landing/Catalogue/Checkout.jsx   the main experience
+  │        ├─ CredArtBubble.jsx                             the floating chatbot
+  │        ├─ travel/                                       dedicated Travel flow
+  │        └─ BankExperience, CategoryChat, …               the other worlds
+  └─ README.md
+  ```
 
-# 2. backend (port 8001) — bank + dining + entertainment routers
-cd backend
-.venv\Scripts\python -m uvicorn api.main:app --port 8001 --reload
+  ## Prerequisites
 
-# 3. frontend (port 5173)
-cd frontend
-npm install   # first time only
-npm run dev
-```
+  - Python 3.11+ (a `backend/.venv` is expected), Node 18+.
+  - `backend/.env` — copy from `backend/.env.example` and fill in what you need.
+    Everything is optional (services degrade gracefully), but for the full
+    experience set the Groq/Gemini LLM keys, `REDIS_URL`, `DUFFEL_API_KEY`
+    (live flight search/booking), `TMDB_API_KEY` (Entertainment world), and
+    `SMTP_USER`/`SMTP_PASS`/`BOOKING_EMAIL_TO` (redemption confirmation emails —
+    a Gmail address + app password works; unconfigured just logs and skips).
 
-Open <http://localhost:5173>. Interactive API docs live at
-<http://localhost:8001/docs>.
+  ## Run
 
-## The three concierges
+  ```powershell
+  # one command — starts MCP (:8000), storefront (:8002), backend (:8001), frontend (:5173)
+  .\run_demo.ps1                     # add -Reset to reset bank demo personas first
+  ```
 
-- **Banks (HDFC)** — the original experience: dashboard, Riya ⇄ Samyak persona
-  switcher, `/chat` concierge, `/redeem` with demo/production modes + OTP. Demo
-  mode is replayable and safe; production shows a real Duffel/Tango reference.
-- **Food & Dining (Subway)** — demo user **Arjun Mehta (500 pts)**, a hardcoded
-  Subway rewards catalogue, vegetarian filtering + preference boost, mock
-  `SUB-DEMO-XXXX` redemptions. Endpoints: `/dining/chat`, `/dining/redeem`,
-  `/dining/health`.
-- **Entertainment & Cinema** — demo user **Priya Nair (800 pts)**, real TMDB
-  now-playing movies (title/poster/rating) mixed with hardcoded rewards (IMAX,
-  OTT, events, gaming), genre + group-size personalization, mock `ENT-DEMO-XXXX`
-  redemptions. Endpoints: `/entertainment/chat`, `/entertainment/redeem`,
-  `/entertainment/health`. Falls back to 5 hardcoded titles if TMDB is
-  unavailable.
+  or manually:
 
-Each new concierge is a **self-contained router** — it shares no tables, services,
-or session state with the bank routes, so it can't break them.
+  ```powershell
+  # 1. reset both bank demo personas (only needed for the Banks world demo)
+  backend\.venv\Scripts\python db\run_reset.py
 
-## Frontend notes
-
-- **Theming** — every component reads its colours from the global `--brand-*` CSS
-  scale. Each category overrides that scale on a wrapper `div` (`theme.jsx`), so a
-  whole experience re-themes with no component changes — including the untouched
-  bank chat.
-- **Laptop ⇄ mobile toggle** — a fixed top-right switch. Laptop shows a
-  browser-window shell; mobile re-renders the same experience inside a phone frame
-  (`IOSDevice`). Every experience takes a `view` prop and fits itself to the frame.
+  # 2. backend (port 8001)
+  cd backend
+  .venv\Scripts\python -m uvicorn api.main:app --port 8001 --reload
 

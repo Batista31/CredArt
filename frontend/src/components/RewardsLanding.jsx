@@ -7,7 +7,9 @@
  * personalization. CTAs open the store (optionally deep-linked to a category).
  */
 import React from "react";
-import { CATEGORY_META, CATALOGUE } from "../lib/catalogue.js";
+import { CATEGORY_META, CATALOGUE, personaFor } from "../lib/catalogue.js";
+import { getActiveUser } from "../lib/api.js";
+import { CredArtBubble } from "./CredArtBubble.jsx";
 
 const fmt = (n) => Number(n).toLocaleString("en-IN");
 const img = (seed, w, h) => `https://picsum.photos/seed/${encodeURIComponent(seed)}/${w}/${h}`;
@@ -86,11 +88,12 @@ function Feature({ icon, title, children }) {
   );
 }
 
-export function RewardsLanding({ theme, onEnter, onSignOut }) {
+export function RewardsLanding({ theme, onEnter, onSignOut, onWorld }) {
   const totalRewards = CATEGORY_META.reduce((a, c) => a + CATALOGUE[c.key].length, 0);
+  const persona = personaFor(getActiveUser());
   return (
-    <div className="cr-root no-sb" style={{ height: "100%", background: "var(--bg)", overflowY: "auto" }}>
-      {/* slim nav */}
+    <div className="cr-root no-sb" style={{ minHeight: "100vh", position: "relative", background: "var(--bg)", overflowY: "auto" }}>
+      {/* ---------- slim nav ---------- */}
       <div style={{ background: "#fff", borderBottom: "1px solid var(--brand-100)", padding: "12px 24px",
         display: "flex", alignItems: "center", gap: 12, position: "sticky", top: 0, zIndex: 10,
         boxShadow: "0 2px 10px rgba(12,39,72,0.05)" }}>
@@ -215,6 +218,34 @@ export function RewardsLanding({ theme, onEnter, onSignOut }) {
           </div>
         </div>
 
+        {/* ---------- more rewards worlds (bank / dining / entertainment) ---------- */}
+        {onWorld && (
+          <div style={{ marginTop: 34 }}>
+            <h2 style={{ fontFamily: "var(--font)", fontSize: 22, fontWeight: 800, color: "var(--brand-900)", margin: "0 0 4px", textAlign: "center" }}>
+              More CredArt worlds
+            </h2>
+            <p style={{ margin: "0 auto 18px", color: "var(--ink-2)", fontSize: 13.5, maxWidth: 560, textAlign: "center" }}>
+              The same concierge, extended to partner programs — each with its own catalogue and points.
+            </p>
+            <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+              {[
+                { key: "bank", emoji: "🏦", label: "HDFC Bank Rewards", blurb: "Card points, expiry alerts & live flight redemption" },
+                { key: "dining", emoji: "🥪", label: "Food & Dining", blurb: "Subway rewards — subs, treats & deals on points" },
+                { key: "entertainment", emoji: "🎬", label: "Entertainment & Cinema", blurb: "Now-playing movies, IMAX & OTT on points" },
+              ].map((w) => (
+                <button key={w.key} className="tap" onClick={() => onWorld(w.key)}
+                  style={{ background: "#fff", border: "1px solid var(--brand-100)", borderRadius: 16, padding: "18px 20px",
+                    textAlign: "left", cursor: "pointer", fontFamily: "var(--font)", boxShadow: "var(--sh-md)" }}>
+                  <div style={{ fontSize: 26, marginBottom: 8 }}>{w.emoji}</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: "var(--brand-800)" }}>{w.label}</div>
+                  <div style={{ fontSize: 12.5, color: "var(--ink-2)", marginTop: 4, lineHeight: 1.5 }}>{w.blurb}</div>
+                  <div style={{ marginTop: 10, fontSize: 12.5, fontWeight: 800, color: "var(--brand-600)" }}>Enter →</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* ---------- footer ---------- */}
         <div style={{ marginTop: 30, textAlign: "center", color: "var(--ink-3)", fontSize: 12, display: "flex",
           alignItems: "center", justifyContent: "center", gap: 7 }}>
@@ -222,6 +253,16 @@ export function RewardsLanding({ theme, onEnter, onSignOut }) {
           CredArt Rewards · every number pre-verified, never invented · demo portal
         </div>
       </div>
+
+      {/* CredArt concierge is available from the moment the user lands — tapping
+          "add to cart" or "view" here jumps into the store (this page has no cart
+          of its own), same persona the store's switcher will show. */}
+      <CredArtBubble persona={persona} balance={persona.points} cartCount={0} cartTotal={0} cart={[]}
+        onAddToCart={(item) => { onEnter(item.category); return { ok: false, reason: `Opening the store so you can add the ${item.name} to your cart.` }; }}
+        onChangeQty={() => ({ ok: false, reason: "Open the store to manage cart quantities." })}
+        onViewItem={(item) => onEnter(item.category)}
+        onCheckout={() => onEnter(null)}
+        onOpenTravel={() => onEnter("travel")} />
     </div>
   );
 }

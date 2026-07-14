@@ -1,0 +1,1 @@
+- [Merchandise best-voucher-card is intended](merchandise-best-voucher-card-intended.md) — don't re-flag "wrong card" in merchandise pricing; reverted by user

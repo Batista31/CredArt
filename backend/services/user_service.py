@@ -53,7 +53,7 @@ async def get_preferences(user_id: str) -> dict | None:
                experiences_weight, value_sensitivity_threshold,
                total_redemptions, total_dismissals,
                preferred_airlines, preferred_hotel_chains, preferred_cuisines,
-               dietary_restrictions
+               dietary_restrictions, family_size
           FROM preferences WHERE user_id = $1
         """,
         user_id,

@@ -48,6 +48,22 @@ export const api = {
   conversations: (userId = ACTIVE_USER_ID) => jget(`/conversations?user_id=${userId}`),
   conversation: (id, userId = ACTIVE_USER_ID) => jget(`/conversations/${id}?user_id=${userId}`),
 
+  /* Rewards-bubble chat history — Redis-backed via the session store. */
+  saveConciergeHistory: (sessionId, personaId, messages, conversationId) =>
+    jpost("/concierge/history", { session_id: sessionId, persona_id: personaId, messages, conversation_id: conversationId || undefined }),
+  conciergeHistory: (sessionId) => jget(`/concierge/history/${sessionId}`),
+
+  /* Confirmation email for the store's cart checkout / chatbot redemptions —
+     these never touch the bank ledger, so this is the only place that emails.
+     `totals` is { totalPoints } or { totalNote } (voucher-paid ₹ orders). */
+  redemptionEmail: (personaName, items, totals = {}, balanceAfter, source = "store") =>
+    jpost("/concierge/redemption-email", {
+      persona_name: personaName, items,
+      total_points: totals.totalPoints ?? undefined,
+      total_note: totals.totalNote ?? undefined,
+      balance_after: balanceAfter ?? undefined, source,
+    }),
+
   redeem: ({ sessionId, candidateId, providerId, mode, consent, userId = ACTIVE_USER_ID }) =>
     jpost("/redeem", {
       user_id: userId, session_id: sessionId, candidate_id: candidateId,

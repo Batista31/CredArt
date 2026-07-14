@@ -12,17 +12,42 @@
  */
 import React from "react";
 import { travelApi } from "../../lib/travelApi.js";
+import { api } from "../../lib/api.js";
 import { TravelSearchForm } from "./TravelSearchForm.jsx";
 import { TravelResults } from "./TravelResults.jsx";
 import { TravelOfferDetails } from "./TravelOfferDetails.jsx";
 import { TravelConfirmation } from "./TravelConfirmation.jsx";
 import { TravelAIPanel } from "./TravelAIPanel.jsx";
+import { FlightOtpStep } from "./FlightOtpStep.jsx";
+
+/* Hotels/cars/packages reservations are demo-local (no real inventory behind
+   them, same as the rest of this app's redemption surfaces) but DO spend real
+   points off Riya's visible balance, gated by budget, and persist across a
+   reload/back-navigation — so "Reserve" behaves like every other redemption
+   here instead of being a no-op animation. */
+const EXTRAS_KEY = "credart:travel:extras:v1";
+function loadExtras() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(EXTRAS_KEY) || "null");
+    return raw && typeof raw === "object" ? { reserved: raw.reserved || {}, spent: raw.spent || 0 } : { reserved: {}, spent: 0 };
+  } catch { return { reserved: {}, spent: 0 }; }
+}
+function saveExtras(extras) {
+  try { localStorage.setItem(EXTRAS_KEY, JSON.stringify(extras)); } catch { /* storage off */ }
+}
 
 export function TravelPage({ theme, onExit }) {
   const [view, setView] = React.useState("search"); // search | results | details | confirmation
   // null = "not loaded yet" (distinct from a real 0-point balance) so the header/
   // search form can show a loading state instead of a misleading "0 pts".
-  const [availablePoints, setAvailablePoints] = React.useState(null);
+  // rawPoints is the authoritative balance from the backend (flights spend
+  // real demo_points there); extrasSpent tracks hotel/car/package reservations,
+  // which are demo-local — availablePoints is the two combined, so every
+  // surface on this page (search form, results, extras strip) sees ONE
+  // consistent spendable number.
+  const [rawPoints, setRawPoints] = React.useState(null);
+  const [extras, setExtras] = React.useState(loadExtras);
+  const availablePoints = rawPoints == null ? null : Math.max(0, rawPoints - extras.spent);
   const [cardName, setCardName] = React.useState("");
   const [healthError, setHealthError] = React.useState(false);
   const [search, setSearch] = React.useState(null);
@@ -36,18 +61,47 @@ export function TravelPage({ theme, onExit }) {
   const [confirmError, setConfirmError] = React.useState("");
   const [confirmation, setConfirmation] = React.useState(null);
   const [askSignal, setAskSignal] = React.useState(null);
+  // OTP gate before a live booking confirms — otpMode holds the payment mode
+  // chosen on the review screen while the OTP overlay is up.
+  const [otpMode, setOtpMode] = React.useState(null);
+  const [otpErr, setOtpErr] = React.useState(null);
+  const otpRef = React.useRef(null);
+
+  function startOtp(paymentMode) {
+    otpRef.current = String(Math.floor(100000 + Math.random() * 900000));
+    setOtpErr(null);
+    setOtpMode(paymentMode);
+  }
+
   const [showOrders, setShowOrders] = React.useState(false);
   const [orders, setOrders] = React.useState(null); // null = loading
 
   React.useEffect(() => {
     travelApi.health().then((h) => {
-      if (h.available_points != null) setAvailablePoints(h.available_points);
+      if (h.available_points != null) setRawPoints(h.available_points);
       if (h.card_name) setCardName(h.card_name);
     }).catch((e) => {
       console.error("travel health check failed — is the backend reachable at", travelApi, e);
       setHealthError(true);
     });
   }, []);
+
+  /* Reserve a hotel/car/package: budget-gated against the CURRENT spendable
+     balance (already net of prior extras), debits it, and persists — so it
+     survives a reload or leaving and returning to Travel. */
+  function reserveExtra(item) {
+    if (extras.reserved[item.id]) return;
+    if (availablePoints == null || item.points > availablePoints) return;
+    const ref = "TRV-" + Math.random().toString(36).slice(2, 8).toUpperCase();
+    const next = { reserved: { ...extras.reserved, [item.id]: ref }, spent: extras.spent + item.points };
+    setExtras(next);
+    saveExtras(next);
+    // Confirmation email — fire-and-forget, same as every other redemption surface.
+    api.redemptionEmail(
+      "Riya", [{ name: item.name, qty: 1, points: item.points, ref }],
+      { totalPoints: item.points }, Math.max(0, availablePoints - item.points), "travel-extras",
+    ).catch(() => { /* best-effort — reservation already confirmed on screen */ });
+  }
 
   async function runSearch(params, sortOverride) {
     setLoading(true);
@@ -57,7 +111,7 @@ export function TravelPage({ theme, onExit }) {
     try {
       const r = await travelApi.searchFlights({ ...params, sort: sortOverride || sort });
       setResults(r.results);
-      setAvailablePoints(r.available_points);
+      setRawPoints(r.available_points);
       setCardName(r.card_name);
     } catch (e) {
       setError(e.message || "Something went wrong searching flights.");
@@ -90,7 +144,7 @@ export function TravelPage({ theme, onExit }) {
         return;
       }
       setConfirmation(r);
-      setAvailablePoints(r.balance_after);
+      setRawPoints(r.balance_after);
       setView("confirmation");
     } catch (e) {
       setConfirmError(e.message || "The booking couldn't be completed.");
@@ -122,7 +176,7 @@ export function TravelPage({ theme, onExit }) {
   };
 
   return (
-    <div className="no-sb" style={{ height: "100%", overflowY: "auto", background: "var(--bg)" }}>
+    <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
       {/* header — matches the rest of the app's rewards nav */}
       <div style={{ background: "#fff", borderBottom: "1px solid var(--brand-100)", padding: "12px 24px",
         display: "flex", alignItems: "center", gap: 12, position: "sticky", top: 0, zIndex: 10,
@@ -190,7 +244,9 @@ export function TravelPage({ theme, onExit }) {
 
       <div style={{ maxWidth: 1080, margin: "0 auto", padding: "26px 24px 90px" }}>
         {view === "search" && (
-          <TravelSearchForm theme={theme} availablePoints={availablePoints} onSearch={runSearch} error={error && view === "search" ? error : ""} />
+          <TravelSearchForm theme={theme} availablePoints={availablePoints} onSearch={runSearch}
+            error={error && view === "search" ? error : ""}
+            reserved={extras.reserved} onReserve={reserveExtra} />
         )}
         {view === "results" && (
           <TravelResults search={search} results={results} loading={loading} error={error} sort={sort}
@@ -201,13 +257,26 @@ export function TravelPage({ theme, onExit }) {
         )}
         {view === "details" && selectedOffer && (
           <TravelOfferDetails theme={theme} offer={selectedOffer} availablePoints={availablePoints}
-            cardName={cardName} onBack={() => setView("results")} onConfirm={confirmRedemption}
+            cardName={cardName} onBack={() => setView("results")} onConfirm={startOtp}
             confirming={confirming} confirmError={confirmError} />
         )}
         {view === "confirmation" && confirmation && (
           <TravelConfirmation theme={theme} confirmation={confirmation} offer={selectedOffer} onDone={backToTravel} />
         )}
       </div>
+
+      {/* OTP-secured confirmation — same design/flow as every other redemption
+          surface in the app (RewardsCheckout's OtpStep): a demo SMS card shows
+          the code, wrong code shakes, expiry/cancel leaves points untouched. */}
+      {otpMode && (
+        <FlightOtpStep offer={selectedOffer} demoOtp={otpRef.current} error={otpErr}
+          onSubmit={(code) => {
+            if (code !== otpRef.current) { setOtpErr("That OTP didn't match. Check the SMS and try again."); return; }
+            setOtpMode(null); setOtpErr(null);
+            confirmRedemption(otpMode);
+          }}
+          onCancel={(msg) => { setOtpMode(null); setOtpErr(null); setConfirmError(msg); }} />
+      )}
 
       <TravelAIPanel theme={theme} context={aiContext} askSignal={askSignal} />
     </div>

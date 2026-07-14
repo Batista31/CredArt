@@ -12,6 +12,8 @@ bank's own merchandise store.
 
 from __future__ import annotations
 
+import re
+
 # Each product: stable id, display title, brand, points price (catalogue-wide),
 # realistic cash value (₹, for effective-value display/scoring), an emoji icon
 # (offline-safe stand-in for the store's product photo), search keywords, and a
@@ -97,21 +99,36 @@ MIN_POINTS: int = min(p["points"] for p in PRODUCTS)
 
 def search(query: str, limit: int = 4) -> list[dict]:
     """Keyword-match the catalogue. Deterministic: scores by matched tokens,
-    then popularity, then price (cheapest first, so affordable options lead)."""
+    then popularity, then price (cheapest first, so affordable options lead).
+
+    Tokens match on word boundaries only — substring matching let "air" (from
+    "air fryer") hit "Conair" and drag unrelated products into the results,
+    where the affordable-first sort could then promote them above the real
+    match. Weak matches (score < half the best) are dropped for the same
+    reason: a query with one strong hit should not pad out with noise."""
     q = (query or "").lower().strip()
     if not q:
         return []
-    tokens = [t for t in q.replace(",", " ").split() if len(t) > 2]
+    q_words = set(re.findall(r"[a-z0-9]+", q))
+    tokens = [t for t in q_words if len(t) > 2]
     scored: list[tuple[int, dict]] = []
     for p in PRODUCTS:
-        haystack = " ".join([p["title"].lower(), p["brand"].lower(), *p["keywords"]])
+        hay_words = set(re.findall(r"[a-z0-9]+", " ".join(
+            [p["title"].lower(), p["brand"].lower(), *p["keywords"]])))
         score = 0
         for kw in p["keywords"]:
-            if kw in q:
-                score += 3 if " " in kw else 2  # phrase match beats single word
-        score += sum(1 for t in tokens if t in haystack)
+            if " " in kw:
+                if kw in q:
+                    score += 3  # phrase match beats single word
+            elif kw in q_words:
+                score += 2
+        score += sum(1 for t in tokens if t in hay_words)
         if score > 0:
             scored.append((score, p))
+    if not scored:
+        return []
+    top = max(s for s, _ in scored)
+    scored = [(s, p) for s, p in scored if s * 2 >= top]
     scored.sort(key=lambda sp: (-sp[0], not sp[1]["popular"], sp[1]["points"]))
     return [p for _, p in scored[:limit]]
 

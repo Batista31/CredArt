@@ -16,12 +16,14 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from services import (
     bank_mcp_client,
     cmr_service,
     conversation_service,
     db,
+    email_service,
     embeddings_service,
     recommendation_session_service,
     scoring_service,
@@ -155,6 +157,87 @@ async def chat(req: ChatRequest):
     session["candidate_index"] = idx
     await store.save(session)
     return resp
+
+
+class ConciergeHistoryRequest(BaseModel):
+    session_id: str
+    persona_id: str
+    messages: list[dict]
+    conversation_id: str | None = None
+
+
+@app.post("/concierge/history")
+async def save_concierge_history(req: ConciergeHistoryRequest):
+    """Store the Rewards Catalogue bubble's transcript in the same Redis-backed
+    session store as the bank /chat flow (in-memory fallback — see session.py).
+    Called automatically (autosave) after every turn; the bubble keeps a local
+    index and reads the transcript back — including conversation_id, so the LLM
+    resumes with full context instead of starting fresh."""
+    session = await store.load(req.session_id)
+    session["concierge_persona_id"] = req.persona_id
+    session["concierge_messages"] = req.messages
+    session["concierge_conversation_id"] = req.conversation_id
+    await store.save(session)
+    return {"status": "saved", "session_id": session["session_id"], "count": len(req.messages)}
+
+
+@app.get("/concierge/history/{session_id}")
+async def get_concierge_history(session_id: str):
+    session = await store.load(session_id)
+    return {
+        "session_id": session["session_id"],
+        "persona_id": session.get("concierge_persona_id"),
+        "conversation_id": session.get("concierge_conversation_id"),
+        "messages": session.get("concierge_messages", []),
+    }
+
+
+class ConciergeRedemptionItem(BaseModel):
+    name: str
+    qty: int = 1
+    points: int | None = None     # points-denominated (store cart)
+    note: str | None = None       # free-text value override (e.g. "₹900 via voucher")
+    ref: str | None = None
+
+
+class ConciergeRedemptionEmailRequest(BaseModel):
+    persona_name: str
+    items: list[ConciergeRedemptionItem]
+    total_points: int | None = None
+    total_note: str | None = None
+    balance_after: int | None = None
+    source: str = "store"  # "store" (cart checkout) | "chat" (bubble food/flight order)
+
+
+@app.post("/concierge/redemption-email")
+async def concierge_redemption_email(req: ConciergeRedemptionEmailRequest):
+    """Confirmation email for the Rewards Catalogue store checkout and the
+    CredArt chatbot's own redemptions (voucher-gated food orders, cart
+    checkout triggered from chat) — these never touch the bank's Postgres
+    ledger, so this is the only place a confirmation gets sent for them.
+    Best-effort: never raises, never blocks the redemption that already
+    completed client-side."""
+    def _value(it: ConciergeRedemptionItem) -> str:
+        if it.note:
+            return it.note
+        return f"{(it.points or 0):,} pts"
+
+    rows = [(f"{it.name}{f' × {it.qty}' if it.qty > 1 else ''}" + (f" ({it.ref})" if it.ref else ""), _value(it))
+            for it in req.items]
+    if req.total_note:
+        rows.append(("Total", req.total_note))
+    elif req.total_points is not None:
+        rows.append(("Total redeemed", f"{req.total_points:,} pts"))
+    if req.balance_after is not None:
+        rows.append(("Points balance after", f"{req.balance_after:,} pts"))
+    sent = await email_service.send_redemption_email(
+        subject=f"CredArt Rewards — redemption confirmed for {req.persona_name}",
+        title="CredArt Rewards — Redemption confirmed 🎉",
+        subtitle=f"{req.persona_name}'s redemption is complete. This is your confirmation.",
+        rows=rows,
+        footer="Rewards Catalogue — a self-contained demo points bucket, never the bank ledger.",
+    )
+    return {"email_sent": sent}
 
 
 @app.post("/redeem", response_model=RedeemResponse)

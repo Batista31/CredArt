@@ -8,6 +8,7 @@ node_modules/
 out/
 dist/
 build/
+.vite/
 
 # Python
 __pycache__/
@@ -37,6 +38,7 @@ env/
 Thumbs.db
 
 # Logs
+backend/logs/
 *.log
 *.err
 npm-debug.log*

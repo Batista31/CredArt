@@ -1,0 +1,22 @@
+{"message": "hi", "expect": {"kind": "greeting"}}
+{"message": "good morning credart!", "expect": {"kind": "greeting"}}
+{"message": "I want to buy an iPhone with my points", "expect": {"kind": "redeem", "journey_type": "product_purchase", "category": "SHOPPING"}}
+{"message": "hmm no, I'd rather buy an air fryer with my points", "expect": {"journey_type": "product_purchase", "slots_contains": {"product_category": "air fryer"}}}
+{"message": "need a gift for my mum's birthday, around 20k points", "expect": {"kind": "redeem", "journey_type": "gift_purchase", "slots_contains": {"occasion": "birthday"}}}
+{"message": "get me an Amazon voucher", "expect": {"kind": "redeem", "journey_type": "voucher_redemption", "slots_contains": {"brand": "amazon"}}}
+{"message": "actually forget the flight, get me an Amazon voucher instead", "expect": {"journey_type": "voucher_redemption"}}
+{"message": "fly me and my wife to Goa from Mumbai this weekend on my Infinia", "expect": {"kind": "redeem", "journey_type": "travel_flight", "card_id": "hdfc_infinia", "category": "TRAVEL", "slots_contains": {"origin": "mumbai", "destination": "goa"}}}
+{"message": "I want to fly from Mumbai to Goa", "expect": {"journey_type": "travel_flight", "category": "TRAVEL", "slots_contains": {"origin": "mumbai", "destination": "goa"}}}
+{"message": "book me a hotel in Jaipur for 3 nights", "expect": {"journey_type": "travel_hotel", "category": "TRAVEL", "slots_contains": {"destination": "jaipur"}}}
+{"message": "my points are expiring next month, what should I do", "expect": {"kind": "check_expiry", "urgency": true, "journey_type": "points_expiry_help"}}
+{"message": "am I about to lose any points?", "expect": {"kind": "check_expiry", "urgency": true}}
+{"message": "what can I even do with my points?", "expect": {"kind": "explore_benefits", "journey_type": "general_reward_advice"}}
+{"message": "can I transfer points to KrisFlyer?", "expect": {"kind": "transfer", "journey_type": "transfer_partner_redemption"}}
+{"message": "convert my points to airline miles for best value", "expect": {"kind": "transfer", "journey_type": "transfer_partner_redemption"}}
+{"message": "what dining benefits does my Regalia have?", "expect": {"card_id": "hdfc_regalia_gold", "category": "DINING"}}
+{"message": "order me some food, I'm starving", "expect": {"category": "DINING"}}
+{"message": "movie tickets for this weekend", "expect": {"category": "ENTERTAINMENT"}}
+{"message": "I want cashback on my statement instead", "expect": {"journey_type": "cashback_or_statement_credit"}}
+{"message": "setting up my new living room, need a sofa and a rug", "expect": {"journey_type": "home_setup"}}
+{"message": "buy noise cancelling headphones under 15000 points", "expect": {"journey_type": "product_purchase", "slots_contains": {"product_category": "headphone"}}}
+{"message": "what lounges can I access with my Millennia?", "expect": {"card_id": "hdfc_millennia", "category": "TRAVEL"}}

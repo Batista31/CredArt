@@ -15,7 +15,8 @@ import React from "react";
 import { api } from "../lib/api.js";
 import { travelApi } from "../lib/travelApi.js";
 import { KobieAvatar } from "./Kobie.jsx";
-import { runConcierge, greetingFor, CHAT_CHIPS, fmtPts, onImgError, rewardImgStyle } from "../lib/catalogue.js";
+import { FlightOtpStep } from "./travel/FlightOtpStep.jsx";
+import { runConcierge, greetingFor, CHAT_CHIPS, CATEGORY_META, fmtPts, onImgError, rewardImgStyle, unusedVouchers, markVoucherUsed } from "../lib/catalogue.js";
 
 const fmt = (n) => Number(n).toLocaleString("en-IN");
 
@@ -48,37 +49,53 @@ function Chip({ children, onClick, delay = 0 }) {
 /* Small inline catalogue card inside the chat: thumb + name + points + actions.
    Over-budget items are flagged BEFORE the user tries anything — the shortfall
    is shown and Add is disabled, so nobody hits a dead end at checkout. */
-function InlineItem({ item, budget, onAsk, onView }) {
+function InlineItem({ item, budget, cartQty = 0, onAsk, onChangeQty, onView }) {
   const affordable = item.points <= budget;
   const short = item.points - budget;
+  const inCart = cartQty > 0;
   return (
     <div style={{
       display: "flex", gap: 10, padding: 9, background: "#fff", borderRadius: 14,
       border: "1.5px solid var(--hairline)", boxShadow: "var(--sh-sm)",
-      opacity: affordable ? 1 : 0.92 }}>
+      opacity: affordable || inCart ? 1 : 0.92 }}>
       <img src={item.image} alt={item.name} loading="lazy"
         onError={onImgError(item)}
         style={{ width: 52, height: 52, borderRadius: 10, flexShrink: 0,
           background: "var(--brand-100)", border: "1px solid var(--hairline)",
-          filter: affordable ? "none" : "grayscale(0.5)", ...rewardImgStyle(item) }} />
+          filter: affordable || inCart ? "none" : "grayscale(0.5)", ...rewardImgStyle(item) }} />
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
         <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--ink)", lineHeight: 1.25 }}>{item.name}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
           <span className="num" style={{ fontSize: 12, fontWeight: 800, color: "var(--brand-600)" }}>{fmtPts(item.points)}</span>
-          {!affordable && (
+          {!affordable && !inCart && (
             <span style={{ fontSize: 10, fontWeight: 800, color: "var(--amber)", background: "var(--amber-bg)",
               padding: "2px 8px", borderRadius: 999 }}>⚠ {fmtPts(short)} short</span>
           )}
         </div>
-        <div style={{ display: "flex", gap: 6, marginTop: 1 }}>
-          <button className="tap" disabled={!affordable} onClick={() => affordable && onAsk(item)}
-            title={affordable ? "Add to cart" : `You need ${fmtPts(short)} more for this`}
-            style={{ fontSize: 11, fontWeight: 800, fontFamily: "var(--font)", padding: "5px 10px", borderRadius: 999,
-              border: "none", cursor: affordable ? "pointer" : "not-allowed",
-              color: affordable ? "#fff" : "var(--ink-3)",
-              background: affordable ? "linear-gradient(160deg,var(--brand-600),var(--brand-700))" : "rgba(8,28,51,0.06)" }}>
-            {affordable ? "+ Add to Cart" : "Over budget"}
-          </button>
+        <div style={{ display: "flex", gap: 6, marginTop: 1, alignItems: "center" }}>
+          {inCart && onChangeQty ? (
+            /* Already in cart — a +/- quantity stepper instead of Add. Incrementing
+               is budget-gated by onChangeQty, same rule as the cart panel. */
+            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <button className="tap" onClick={() => onChangeQty(item, -1)} title="Decrease quantity"
+                style={{ width: 22, height: 22, borderRadius: 999, border: "1px solid var(--brand-200)", background: "#fff",
+                  color: "var(--brand-700)", cursor: "pointer", fontWeight: 800, fontSize: 13, lineHeight: 1 }}>−</button>
+              <span className="num" style={{ minWidth: 14, textAlign: "center", fontSize: 11.5, fontWeight: 800, color: "var(--ink)" }}>{cartQty}</span>
+              <button className="tap" onClick={() => onChangeQty(item, 1)} title="Increase quantity"
+                style={{ width: 22, height: 22, borderRadius: 999, border: "1px solid var(--brand-200)", background: "#fff",
+                  color: "var(--brand-700)", cursor: "pointer", fontWeight: 800, fontSize: 13, lineHeight: 1 }}>+</button>
+              <span style={{ fontSize: 10, fontWeight: 700, color: "var(--ink-3)" }}>in cart</span>
+            </div>
+          ) : (
+            <button className="tap" disabled={!affordable} onClick={() => affordable && onAsk(item)}
+              title={affordable ? "Add to cart" : `You need ${fmtPts(short)} more for this`}
+              style={{ fontSize: 11, fontWeight: 800, fontFamily: "var(--font)", padding: "5px 10px", borderRadius: 999,
+                border: "none", cursor: affordable ? "pointer" : "not-allowed",
+                color: affordable ? "#fff" : "var(--ink-3)",
+                background: affordable ? "linear-gradient(160deg,var(--brand-600),var(--brand-700))" : "rgba(8,28,51,0.06)" }}>
+              {affordable ? "+ Add to Cart" : "Over budget"}
+            </button>
+          )}
           <button className="tap" onClick={() => onView(item)}
             style={{ fontSize: 11, fontWeight: 700, fontFamily: "var(--font)", padding: "5px 10px", borderRadius: 999,
               border: "1px solid var(--brand-200)", background: "transparent", color: "var(--brand-700)", cursor: "pointer" }}>
@@ -153,9 +170,17 @@ function InlineFlight({ offer, onBook, busy }) {
           </div>
         </div>
         <div style={{ textAlign: "right", flexShrink: 0 }}>
-          <div className="num" style={{ fontSize: 13.5, fontWeight: 800, color: "var(--brand-600)" }}>{fmtPts(offer.points_required)}</div>
+          {offer.voucher ? (
+            <>
+              <div className="num" style={{ fontSize: 10.5, color: "var(--ink-3)", textDecoration: "line-through" }}>{fmtPts(offer.points_required)}</div>
+              <div className="num" style={{ fontSize: 13.5, fontWeight: 800, color: "var(--green)" }}>{fmtPts(offer.effective_points)}</div>
+              <div style={{ fontSize: 9, color: "var(--green)", fontWeight: 800 }}>🎟 {offer.voucher.airline} voucher applied</div>
+            </>
+          ) : (
+            <div className="num" style={{ fontSize: 13.5, fontWeight: 800, color: "var(--brand-600)" }}>{fmtPts(offer.points_required)}</div>
+          )}
           <div style={{ fontSize: 9.5, color: "var(--ink-3)" }}>₹{Number(offer.cash_price_inr).toLocaleString("en-IN")} value</div>
-          {!offer.affordable && (
+          {!offer.affordable && !offer.voucher && (
             <div style={{ fontSize: 9.5, color: "var(--amber)", fontWeight: 800, marginTop: 2 }}>points + cash</div>
           )}
         </div>
@@ -231,15 +256,22 @@ function describeConvo(c) {
   return `we spoke ${when}`;
 }
 
-export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, onAddToCart, onViewItem, onCheckout, onSpend, onOpenTravel, view = "laptop" }) {
+export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, cart = [], onAddToCart, onChangeQty, onViewItem, onCheckout, onSpend, onOpenTravel, view = "laptop" }) {
   const [open, setOpen] = React.useState(false);
+  const [expanded, setExpanded] = React.useState(false);
   const idc = React.useRef(0);
   const nid = () => ++idc.current;
   const [messages, setMessages] = React.useState([]);
   const [busy, setBusy] = React.useState(false);
   const [input, setInput] = React.useState("");
   const [flow, setFlow] = React.useState(null);
+  // OTP gate for in-chat flight bookings — flightOtp holds the offer awaiting a
+  // code (null = overlay closed); flightOtpRef holds the demo code we issued.
+  const [flightOtp, setFlightOtp] = React.useState(null);
+  const [flightOtpErr, setFlightOtpErr] = React.useState(null);
+  const flightOtpRef = React.useRef(null);
   const [sessionId, setSessionId] = React.useState(null);
+  const [conversationId, setConversationId] = React.useState(null);
   // Holds the saved transcript while we wait for the user to pick "continue" vs
   // "start fresh" — kept out of `messages` until they choose so nothing renders twice.
   const [pendingResume, setPendingResume] = React.useState(null);
@@ -267,7 +299,7 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
   React.useEffect(() => {
     if (seeded.current === persona.id) return;
     seeded.current = persona.id;
-    setFlow(null); setSessionId(null); setPendingResume(null); setShowHistory(false);
+    setFlow(null); setSessionId(null); setConversationId(null); setPendingResume(null); setShowHistory(false);
     cid.current = newCid();
     const list = loadConvos(persona.id);
     const latest = list[0];
@@ -288,12 +320,18 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
 
   // Persist the live transcript so it can be resumed / found in history later.
   // Skipped while a resume choice is pending so the transient prompt message
-  // never overwrites the saved conversation it's asking about.
+  // never overwrites the saved conversation it's asking about. Also mirrored
+  // to the backend's Redis-backed store (/concierge/history) best-effort, so
+  // the autosaved history survives a cleared localStorage / another browser.
   React.useEffect(() => {
     if (pendingResume) return;
     if (messages.length < 2) return; // don't persist a bare greeting
     saveConvo(persona.id, { cid: cid.current, messages, flow, sessionId });
-  }, [messages, flow, sessionId, pendingResume, persona.id]);
+    if (sessionId) {
+      api.saveConciergeHistory(sessionId, persona.id,
+        messages.map(({ id, ...m }) => m), conversationId).catch(() => { /* offline — local copy is enough */ });
+    }
+  }, [messages, flow, sessionId, conversationId, pendingResume, persona.id]);
 
   function resumeConversation() {
     if (!pendingResume) return;
@@ -308,7 +346,7 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
   function newChat() {
     cid.current = newCid();
     setMessages([{ id: nid(), who: "bot", intro: true, text: greetingFor(persona, balRef.current) }]);
-    setFlow(null); setSessionId(null); setPendingResume(null); setShowHistory(false);
+    setFlow(null); setSessionId(null); setConversationId(null); setPendingResume(null); setShowHistory(false);
   }
   const startFresh = newChat;
   function openHistory() {
@@ -365,13 +403,37 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
       push({ who: "bot", text: local.reply });
       try {
         const r = await travelApi.searchFlights(local.flightParams);
-        const flights = (r.results || []).slice(0, 3);
+        // Airline vouchers redeemed from the store are applied to MATCHING live
+        // fares: the voucher's points value comes off the fare, and afford-
+        // ability is re-checked against the visible store balance.
+        const airlineVouchers = unusedVouchers(persona.id, "flight");
+        const spendable = Math.max(0, balRef.current - cartRef.current);
+        const flights = (r.results || []).slice(0, 3).map((o) => {
+          const v = airlineVouchers.find((av) => (o.airline || "").toLowerCase().includes((av.airline || "").toLowerCase()));
+          if (!v) return { ...o, affordable: o.points_required <= spendable };
+          const eff = Math.max(0, o.points_required - v.points);
+          return { ...o, voucher: v, effective_points: eff, affordable: eff <= spendable };
+        });
         if (!flights.length) {
           push({ who: "bot", text: "Hmm — no live flights came back for that route and date. Want to try different cities or dates?",
             chips: ["Book a flight", "Show me travel options"] });
         } else {
+          const pax = local.flightParams.passengers || 1;
+          const voucherNote = flights.some((f) => f.voucher)
+            ? ` Your ${flights.find((f) => f.voucher).voucher.name} is applied to matching fares below.`
+            : (airlineVouchers.length
+              ? ` (Your ${airlineVouchers[0].name} only applies to ${airlineVouchers[0].airline} fares — none matched this search.)`
+              : "");
+          // Budget honesty for multi-traveller bookings: if NOTHING is
+          // affordable even after the voucher, say so right here — with the
+          // exact shortfall — before the user taps Book and hits a dead end.
+          const cheapest = [...flights].sort((a, b) => (a.effective_points ?? a.points_required) - (b.effective_points ?? b.points_required))[0];
+          const cheapestCost = cheapest.effective_points ?? cheapest.points_required;
+          const shortNote = !flights.some((f) => f.affordable)
+            ? ` ⚠ Heads-up: ${pax > 1 ? `${pax} tickets` : "this trip"} runs ${fmt(cheapestCost)} pts at the cheapest${cheapest.voucher ? " — even with your voucher applied" : ""}, and you have ${fmt(spendable)} spendable — you're ${fmt(cheapestCost - spendable)} short. Try fewer travellers or another date.`
+            : "";
           push({ who: "bot",
-            text: `Here are live options for ${r.origin} → ${r.destination}, real fares priced into points against your ${fmt(r.available_points)} travel points on ${r.card_name}. Tap to book:`,
+            text: `Here are live options for ${r.origin} → ${r.destination} for ${pax} traveller${pax > 1 ? "s" : ""}, real Duffel fares priced into points against your ${fmt(r.available_points)} travel points on ${r.card_name}.${voucherNote}${shortNote}`,
             flights, chips: onOpenTravel ? ["Open full Travel page"] : [] });
         }
       } catch {
@@ -385,14 +447,25 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
     if (local.reply != null) {
       // Local engine handled it — coherent reply + real catalogue cards.
       push({ who: "bot", text: local.reply, items: local.items || [], chips: local.chips || [] });
+      // A confirmed voucher-gated order (food journey) signals an email receipt —
+      // fire-and-forget, never blocks the chat reply already shown.
+      if (local.emailReceipt) {
+        api.redemptionEmail(persona.name, local.emailReceipt.items,
+          { totalNote: local.emailReceipt.totalNote, totalPoints: local.emailReceipt.totalPoints },
+          null, "chat").catch(() => { /* best-effort — reply already confirmed the order */ });
+      }
       setBusy(false);
       return;
     }
 
     // No local intent: best-effort backend enrichment, else mocked fallback.
+    // conversationId is threaded through so the backend's dialogue manager
+    // resumes the SAME conversation (and passes its full history to the LLM)
+    // instead of starting a fresh, context-less one on every enrichment call.
     try {
-      const r = await api.chat(text, sessionId, null, persona.id);
+      const r = await api.chat(text, sessionId, conversationId, persona.id);
       if (r && r.session_id) setSessionId(r.session_id);
+      if (r && r.conversation_id) setConversationId(r.conversation_id);
       const reply = (r && r.reply) || local.fallbackReply;
       push({ who: "bot", text: reply, items: [], chips: local.chips || [] });
     } catch {
@@ -411,21 +484,44 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
     sendText(c);
   }
 
+  /* Tapping Book does NOT book — it opens the OTP gate first, exactly like the
+     Travel page's review screen. Affordability is still checked here, BEFORE we
+     ask for a code, so the user is never sent through OTP only to be told they
+     can't afford it. confirmFlightBooking() is what actually spends points. */
+  function handleBookFlight(offer) {
+    if (busy || flightOtp) return;
+    const effCost = offer.voucher ? offer.effective_points : offer.points_required;
+    const spendable = Math.max(0, balRef.current - cartRef.current);
+    if (effCost > spendable) {
+      push({ who: "bot",
+        text: `⚠ This booking needs ${fmtPts(effCost)}${offer.voucher ? ` (after your ${offer.voucher.airline} voucher)` : ""}, but you have ${fmtPts(spendable)} spendable — you're ${fmtPts(effCost - spendable)} short. Try fewer travellers, another date, or a cheaper fare.`,
+        chips: ["Book a flight", "Show me travel options"] });
+      return;
+    }
+    flightOtpRef.current = String(Math.floor(100000 + Math.random() * 900000));
+    setFlightOtpErr(null);
+    setFlightOtp(offer);
+  }
+
   /* Real Duffel test order (real PNR) on demo credits → order history + invoice.
-     Mirror the spend onto the store header. */
-  async function handleBookFlight(offer) {
+     Mirror the spend onto the store header. Only reached after a correct OTP. */
+  async function confirmFlightBooking(offer) {
     if (busy) return;
+    const effCost = offer.voucher ? offer.effective_points : offer.points_required;
     setBusy(true);
-    const mode = offer.affordable ? "points" : "points_plus_cash";
+    const mode = "points";
     try {
       const r = await travelApi.confirm(offer.offer_id, mode);
       if (r.status === "completed") {
-        if (onSpend) onSpend(r.points_used);
+        if (offer.voucher) markVoucherUsed(persona.id, offer.voucher.id);
+        if (onSpend) onSpend(r.points_used ?? effCost);
         const invoiceNote = r.email_sent
           ? ` Your invoice is on its way to ${r.email_to}.`
           : " Your invoice is saved to your order history.";
         push({ who: "bot",
-          text: `✅ Booked! ${offer.airline} ${offer.origin}→${offer.destination}. PNR ${r.booking_reference}. Redeemed ${fmtPts(r.points_used)}${r.cash_due_inr ? ` + ₹${fmt(r.cash_due_inr)}` : ""}.${invoiceNote}`,
+          text: `✅ Booked! ${offer.airline} ${offer.origin}→${offer.destination}. PNR ${r.booking_reference}. ${offer.voucher
+            ? `Applied your ${offer.voucher.name} (−${fmtPts(offer.voucher.points)}) and redeemed ${fmtPts(r.points_used ?? effCost)} on top`
+            : `Redeemed ${fmtPts(r.points_used ?? effCost)}`}${r.cash_due_inr ? ` + ₹${fmt(r.cash_due_inr)}` : ""}.${invoiceNote}`,
           chips: ["My bookings", "Book another flight", "Show me travel options"] });
       } else {
         push({ who: "bot", text: `That booking didn't go through: ${r.rollback_reason || "please try another option"}.`,
@@ -449,9 +545,21 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
       chips: ["Redeem my cart", ...CHAT_CHIPS.slice(1)] });
   }
 
+  /* +/- from an inline chat card. Budget honesty applies here exactly like the
+     cart panel: an increase that would exceed the balance is rejected with a
+     clear reason instead of silently failing or overspending. */
+  function handleChangeQty(item, delta) {
+    const res = onChangeQty && onChangeQty(item.id, delta);
+    if (!res || !res.ok) {
+      push({ who: "bot", text: res && res.reason ? res.reason : `I can't change the quantity for ${item.name} right now.` });
+    }
+  }
+
   function handleView(item) { onViewItem && onViewItem(item); setOpen(false); }
 
   const mobile = view === "mobile";
+  const panelW = expanded ? "min(560px, calc(100% - 24px))" : (mobile ? "calc(100% - 24px)" : "min(400px, calc(100% - 44px))");
+  const panelH = expanded ? "min(760px, calc(100% - 60px))" : (mobile ? "calc(100% - 150px)" : "min(560px, calc(100% - 130px))");
 
   return (
     <>
@@ -480,10 +588,10 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
       {/* ---------- chat panel ---------- */}
       {open && (
         <div style={{ position: "absolute", right: mobile ? 12 : 22, bottom: mobile ? 88 : 94, zIndex: 61,
-          width: mobile ? "calc(100% - 24px)" : "min(400px, calc(100% - 44px))",
-          height: mobile ? "calc(100% - 150px)" : "min(560px, calc(100% - 130px))",
+          width: panelW, height: panelH,
           background: "#fff", borderRadius: 20, overflow: "hidden", display: "flex", flexDirection: "column",
           boxShadow: "0 26px 60px rgba(30,27,75,0.42), 0 0 0 1px rgba(0,0,0,0.05)",
+          transition: "width .22s ease, height .22s ease",
           animation: "sheetUp .28s cubic-bezier(.2,.8,.2,1)" }}>
 
           {/* header */}
@@ -514,11 +622,34 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
                 display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" /></svg>
             </button>
+            <button className="tap" onClick={() => setExpanded((e) => !e)} title={expanded ? "Shrink" : "Enlarge"}
+              style={{ background: "rgba(255,255,255,0.16)", border: "none", width: 30, height: 30, borderRadius: 9,
+                display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
+              {expanded ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 3v4a2 2 0 0 1-2 2H3M15 3v4a2 2 0 0 0 2 2h4M9 21v-4a2 2 0 0 0-2-2H3M15 21v-4a2 2 0 0 1 2-2h4" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3 9V3h6M21 9V3h-6M3 15v6h6M21 15v6h-6" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              )}
+            </button>
             <button className="tap" onClick={() => setOpen(false)} title="Close"
               style={{ background: "rgba(255,255,255,0.16)", border: "none", width: 30, height: 30, borderRadius: 9,
                 display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
               <svg width="15" height="15" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" /></svg>
             </button>
+          </div>
+
+          {/* category quick-switch — one tap to change what's being browsed */}
+          <div className="no-sb" style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 10px",
+            background: "var(--bg)", borderBottom: "1px solid var(--hairline)", flexShrink: 0, overflowX: "auto" }}>
+            {CATEGORY_META.map((meta) => (
+              <button key={meta.key} className="tap" onClick={() => sendText(`Show me ${meta.label} options`)}
+                title={`Browse ${meta.label}`}
+                style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700,
+                  fontFamily: "var(--font)", padding: "6px 10px", borderRadius: 999, border: "1px solid var(--brand-100)",
+                  background: "#fff", color: "var(--ink-2)", cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
+                {meta.emoji} {meta.label}
+              </button>
+            ))}
           </div>
 
           {/* conversation history drawer — overlays the transcript, same panel */}
@@ -581,7 +712,8 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
                     <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingLeft: 34, width: "100%", maxWidth: "94%" }}>
                       {m.items.filter(Boolean).map((it) => (
                         <InlineItem key={it.id} item={it} budget={Math.max(0, balance - cartTotal)}
-                          onAsk={handleAddToCart} onView={handleView} />
+                          cartQty={(cart.find((c) => c.id === it.id) || {}).qty || 0}
+                          onAsk={handleAddToCart} onChangeQty={handleChangeQty} onView={handleView} />
                       ))}
                     </div>
                   )}
@@ -632,6 +764,29 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
             </div>
           </div>
         </div>
+      )}
+
+      {/* OTP gate for an in-chat flight booking — same overlay the Travel page
+          uses, so booking from chat is step-up secured exactly like booking from
+          the full page. Points move only after the right code is entered. */}
+      {flightOtp && (
+        <FlightOtpStep offer={flightOtp} demoOtp={flightOtpRef.current} error={flightOtpErr}
+          onSubmit={(code) => {
+            if (code !== flightOtpRef.current) {
+              setFlightOtpErr("That OTP didn't match. Check the SMS and try again.");
+              return;
+            }
+            const offer = flightOtp;
+            setFlightOtp(null);
+            setFlightOtpErr(null);
+            confirmFlightBooking(offer);
+          }}
+          onCancel={(msg) => {
+            setFlightOtp(null);
+            setFlightOtpErr(null);
+            push({ who: "bot", text: `${msg} Your flight wasn't booked — want to try again?`,
+              chips: ["Book a flight", "Show me travel options"] });
+          }} />
       )}
     </>
   );
