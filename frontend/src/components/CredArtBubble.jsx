@@ -265,6 +265,12 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
   const [busy, setBusy] = React.useState(false);
   const [input, setInput] = React.useState("");
   const [flow, setFlow] = React.useState(null);
+  // Voice input — Web Speech API (Chrome/Edge/Safari; the mic button is hidden
+  // entirely where it's unsupported). recRef holds the live recognition session.
+  const SR = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+  const [listening, setListening] = React.useState(false);
+  const recRef = React.useRef(null);
+  const sendTextRef = React.useRef(null);
   // OTP gate for in-chat flight bookings — flightOtp holds the offer awaiting a
   // code (null = overlay closed); flightOtpRef holds the demo code we issued.
   const [flightOtp, setFlightOtp] = React.useState(null);
@@ -476,6 +482,63 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
   }
 
   function send() { const t = input.trim(); if (!t || busy) return; setInput(""); sendText(t); }
+  sendTextRef.current = sendText;
+
+  /* Tear down the live recognition session without letting its onend fire a
+     send — used when the panel closes or the bubble unmounts mid-dictation. */
+  function killMic() {
+    const r = recRef.current;
+    if (!r) return;
+    r.onresult = r.onerror = r.onend = null;
+    try { r.abort(); } catch { /* already stopped */ }
+    recRef.current = null;
+  }
+
+  /* Mic tap: start (or stop) dictation. Interim words stream into the input box
+     so the user sees themselves being heard; the final transcript auto-sends,
+     exactly as if they'd typed it and hit Enter. */
+  function toggleMic() {
+    if (listening) { try { recRef.current && recRef.current.stop(); } catch { /* no-op */ } return; }
+    if (!SR || busy) return;
+    const rec = new SR();
+    rec.lang = "en-IN";
+    rec.interimResults = true;
+    rec.continuous = false;
+    let finalText = "";
+    rec.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += t; else interim += t;
+      }
+      setInput((finalText + interim).trimStart());
+    };
+    rec.onerror = (e) => {
+      finalText = "";
+      setInput("");
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        push({ who: "bot", text: "I couldn't access your microphone — allow mic access in the browser bar and tap the mic again." });
+      } else if (e.error === "no-speech") {
+        push({ who: "bot", text: "I didn't catch anything — tap the mic and start speaking once it turns red." });
+      }
+    };
+    rec.onend = () => {
+      setListening(false);
+      recRef.current = null;
+      const t = finalText.trim();
+      if (t) { setInput(""); sendTextRef.current(t); }
+    };
+    recRef.current = rec;
+    setListening(true);
+    setInput("");
+    try { rec.start(); } catch { setListening(false); recRef.current = null; }
+  }
+
+  // Closing the panel (or unmounting) mid-dictation kills the mic session.
+  React.useEffect(() => {
+    if (!open) { killMic(); setListening(false); }
+    return killMic;
+  }, [open]);
 
   /* Chip taps normally re-enter the concierge as text; a couple are UI actions
      (open the full Travel page) and are intercepted here instead. */
@@ -751,9 +814,29 @@ export function CredArtBubble({ persona, balance, cartCount = 0, cartTotal = 0, 
           <div style={{ padding: "9px 12px 12px", background: "#fff", borderTop: "1px solid var(--hairline)", flexShrink: 0 }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()}
-                placeholder="Ask CredArt about your points…"
-                style={{ flex: 1, border: "none", background: "var(--bg)", borderRadius: 999, padding: "11px 15px",
+                placeholder={listening ? "Listening… speak now" : "Ask CredArt about your points…"}
+                style={{ flex: 1, border: "none", background: listening ? "rgba(240,96,78,0.08)" : "var(--bg)", borderRadius: 999, padding: "11px 15px",
                   fontFamily: "var(--font)", fontSize: 13.5, color: "var(--ink)", outline: "none" }} />
+              {/* voice input — rendered only where the Web Speech API exists */}
+              {SR && (
+                <button className="tap" onClick={toggleMic} disabled={busy && !listening}
+                  title={listening ? "Stop listening" : "Speak to CredArt"}
+                  style={{ width: 42, height: 42, borderRadius: 999, flexShrink: 0, position: "relative", padding: 0,
+                    border: listening ? "none" : "1.5px solid var(--brand-200)",
+                    cursor: busy && !listening ? "wait" : "pointer", opacity: busy && !listening ? 0.5 : 1,
+                    background: listening ? "linear-gradient(160deg,#F0604E,#C73A2C)" : "#fff",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    boxShadow: listening ? "0 5px 14px rgba(240,96,78,0.4)" : "var(--sh-sm)" }}>
+                  {listening && (
+                    <span style={{ position: "absolute", inset: 0, borderRadius: "50%", background: "#F0604E",
+                      animation: "haloPulse 1.6s ease-out infinite", zIndex: -1 }} />
+                  )}
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+                    <rect x="9" y="3" width="6" height="11" rx="3" stroke={listening ? "#fff" : "var(--brand-700)"} strokeWidth="1.9" />
+                    <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3.2" stroke={listening ? "#fff" : "var(--brand-700)"} strokeWidth="1.9" strokeLinecap="round" />
+                  </svg>
+                </button>
+              )}
               <button className="tap" onClick={send} disabled={busy}
                 style={{ width: 42, height: 42, borderRadius: 999, border: "none", flexShrink: 0,
                   opacity: busy ? 0.5 : 1, cursor: busy ? "wait" : "pointer",

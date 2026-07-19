@@ -76,6 +76,11 @@ export const api = {
   dismiss: (label, cardId, userId = ACTIVE_USER_ID) =>
     jpost("/cmr/dismiss", { user_id: userId, label, card_id: cardId || undefined }),
 
+  /* Save a delivery address onto the CMR profile. `address` uses the backend's
+     Address shape: { label, address_line1, address_line2?, city, state?, pincode }. */
+  saveAddress: (address, makeDefault = false, userId = ACTIVE_USER_ID) =>
+    jpost("/cmr/address", { user_id: userId, make_default: makeDefault, ...address }),
+
   bookingSession: (id) => jget(`/booking-sessions/${id}`),
   submitOtp: (id, otp) => jpost(`/booking-sessions/${id}/otp`, { otp }),
 

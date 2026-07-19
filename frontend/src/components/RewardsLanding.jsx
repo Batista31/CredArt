@@ -110,10 +110,10 @@ export function RewardsLanding({ theme, onEnter, onSignOut, onWorld }) {
           background: theme.cardGrad, color: "#fff", fontFamily: "var(--font)", fontWeight: 800, fontSize: 13, cursor: "pointer" }}>
           Browse the Store
         </button>
-        <button className="tap" onClick={onSignOut} title="Sign out" style={{ padding: "9px 14px", borderRadius: 999,
+        <button className="tap" onClick={onSignOut} title="Back to CredArt" style={{ padding: "9px 14px", borderRadius: 999,
           border: "1.5px solid var(--brand-200)", background: "#fff", color: "var(--brand-700)",
           fontFamily: "var(--font)", fontWeight: 800, fontSize: 13, cursor: "pointer" }}>
-          Sign out
+          ← Back
         </button>
       </div>
 

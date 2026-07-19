@@ -130,8 +130,39 @@ function OtpStep({ persona, total, demoOtp, onSubmit, onCancel, error }) {
   );
 }
 
-/* ---------- delivery address (merchandise only, CMR-autofilled) ---------- */
-function AddressStep({ persona, cmr, cmrLive, merchandise, onConfirm, onCancel }) {
+/* ---------- delivery address (merchandise only, CMR-autofilled) ----------
+   The default CMR address arrives pre-selected (the autofill); every other
+   saved address is one tap away, and "+ Add a new address" opens an inline
+   form whose result joins the list, gets selected, and is saved to the CMR. */
+const ADDR_LABELS = ["Home", "Office", "Other"];
+const EMPTY_ADDR_FORM = { label: "Home", address: "", city: "", state: "", pincode: "" };
+
+function AddressStep({ persona, cmr, cmrLive, merchandise, addresses, onPick, onAdd, onConfirm, onCancel }) {
+  const [sel, setSel] = React.useState(0);
+  const [adding, setAdding] = React.useState(false);
+  const [form, setForm] = React.useState(EMPTY_ADDR_FORM);
+  // Live CMR fetch can replace the seeded list while this step is open — the
+  // parent re-applies the default (index 0), so the highlight must follow it.
+  React.useEffect(() => { setSel(0); }, [addresses[0] && addresses[0].address]);
+
+  const setF = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const formOk = form.address.trim() && form.city.trim() && /^\d{6}$/.test(form.pincode.trim());
+
+  function saveNew() {
+    if (!formOk) return;
+    onAdd({ label: form.label.trim() || "Other", address: form.address.trim(), city: form.city.trim(),
+      state: form.state.trim(), pincode: form.pincode.trim() });
+    setSel(addresses.length); // the new entry is appended at the end
+    setAdding(false);
+    setForm(EMPTY_ADDR_FORM);
+  }
+
+  const inputStyle = {
+    width: "100%", boxSizing: "border-box", border: "1.5px solid var(--hairline)", borderRadius: 11,
+    padding: "10px 12px", fontFamily: "var(--font)", fontSize: 13, fontWeight: 600, color: "var(--ink)",
+    outline: "none", background: "#fff",
+  };
+
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
       <div style={{ background: "linear-gradient(135deg,var(--brand-700),var(--brand-900))", color: "#fff", padding: "26px 22px 20px" }}>
@@ -151,31 +182,97 @@ function AddressStep({ persona, cmr, cmrLive, merchandise, onConfirm, onCancel }
           border: "1px solid var(--brand-200)", borderRadius: 12, padding: "11px 14px", marginBottom: 14 }}>
           <span style={{ fontSize: 17 }}>✨</span>
           <div style={{ fontSize: 12.5, color: "var(--brand-800)", lineHeight: 1.5 }}>
-            <b>Personalized for {persona.short}</b> — CredArt pre-filled this from your
-            {" "}{cmrLive ? "live CMR profile" : "saved CredArt profile"}, so you don't have to type a thing.
+            <b>Personalized for {persona.short}</b> — CredArt pre-filled your default address from your
+            {" "}{cmrLive ? "live CMR profile" : "saved CredArt profile"}. Pick another saved address, or add a new one.
           </div>
         </div>
 
-        {/* the autofilled address card */}
-        <div className="animate-msg" style={{ background: "#fff", border: "2px solid var(--brand-500)", borderRadius: 14,
-          padding: "14px 16px", boxShadow: "var(--sh-md)", position: "relative" }}>
-          <span style={{ position: "absolute", top: -9, left: 14, fontSize: 9.5, fontWeight: 800, letterSpacing: 0.6,
-            background: "var(--brand-600)", color: "#fff", padding: "2px 9px", borderRadius: 999 }}>
-            AUTOFILLED FROM CMR
-          </span>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 2 }}>
-            <span style={{ width: 36, height: 36, borderRadius: 10, background: "var(--brand-50)", display: "flex",
-              alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1v-8z" stroke="var(--brand-600)" strokeWidth="1.8" strokeLinejoin="round" /></svg>
-            </span>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 800, color: "var(--brand-800)" }}>{cmr.addressLabel} · {persona.name}</div>
-              <div style={{ fontSize: 12.5, color: "var(--ink-2)", marginTop: 2, lineHeight: 1.45 }}>
-                {cmr.address}, {cmr.city}, {cmr.state} {cmr.pincode}
+        {/* saved addresses — default pre-selected (the autofill), one tap to switch */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {addresses.map((a, i) => {
+            const active = i === sel;
+            return (
+              <button key={`${a.label}-${a.pincode}-${i}`} className="tap animate-msg"
+                onClick={() => { setSel(i); onPick(a); }}
+                style={{ textAlign: "left", width: "100%", background: "#fff", borderRadius: 14, cursor: "pointer",
+                  border: active ? "2px solid var(--brand-500)" : "1.5px solid var(--hairline)",
+                  padding: "14px 16px", boxShadow: active ? "var(--sh-md)" : "var(--sh-sm)", position: "relative",
+                  fontFamily: "var(--font)" }}>
+                {active && (
+                  <span style={{ position: "absolute", top: -9, left: 14, fontSize: 9.5, fontWeight: 800, letterSpacing: 0.6,
+                    background: a.source === "new" ? "var(--green)" : "var(--brand-600)", color: "#fff", padding: "2px 9px", borderRadius: 999 }}>
+                    {a.source === "new" ? "NEW ADDRESS" : "AUTOFILLED FROM CMR"}
+                  </span>
+                )}
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 2 }}>
+                  <span style={{ width: 36, height: 36, borderRadius: 10, background: "var(--brand-50)", display: "flex",
+                    alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1v-8z" stroke="var(--brand-600)" strokeWidth="1.8" strokeLinejoin="round" /></svg>
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: "var(--brand-800)" }}>{a.label} · {persona.name}</div>
+                    <div style={{ fontSize: 12.5, color: "var(--ink-2)", marginTop: 2, lineHeight: 1.45 }}>
+                      {a.address}, {a.city}{a.state ? `, ${a.state}` : ""} {a.pincode}
+                    </div>
+                  </div>
+                  {/* radio indicator */}
+                  <span style={{ width: 20, height: 20, borderRadius: 999, flexShrink: 0,
+                    border: active ? "6px solid var(--brand-600)" : "2px solid var(--brand-200)",
+                    background: "#fff", boxSizing: "border-box" }} />
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* add a new address — inline form, saved back to the CMR profile */}
+        {!adding ? (
+          <button className="tap" onClick={() => setAdding(true)} style={{ width: "100%", marginTop: 10,
+            padding: "12px 14px", borderRadius: 14, border: "1.5px dashed var(--brand-300)", background: "transparent",
+            color: "var(--brand-700)", fontFamily: "var(--font)", fontSize: 13, fontWeight: 800, cursor: "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" /></svg>
+            Add a new address
+          </button>
+        ) : (
+          <div className="animate-msg" style={{ marginTop: 10, background: "#fff", border: "1.5px solid var(--brand-200)",
+            borderRadius: 14, padding: "14px 16px", boxShadow: "var(--sh-sm)" }}>
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.5, color: "var(--ink-3)", marginBottom: 10 }}>NEW DELIVERY ADDRESS</div>
+            {/* label quick-picks */}
+            <div style={{ display: "flex", gap: 7, marginBottom: 10 }}>
+              {ADDR_LABELS.map((l) => (
+                <button key={l} className="tap" onClick={() => setForm((f) => ({ ...f, label: l }))}
+                  style={{ padding: "6px 13px", borderRadius: 999, cursor: "pointer", fontFamily: "var(--font)",
+                    fontSize: 12, fontWeight: 800,
+                    border: form.label === l ? "1.5px solid var(--brand-500)" : "1.5px solid var(--hairline)",
+                    background: form.label === l ? "var(--brand-50)" : "#fff",
+                    color: form.label === l ? "var(--brand-700)" : "var(--ink-3)" }}>{l}</button>
+              ))}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <input value={form.address} onChange={setF("address")} placeholder="Flat / street / area *" style={inputStyle} autoFocus />
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={form.city} onChange={setF("city")} placeholder="City *" style={{ ...inputStyle, flex: 1.2 }} />
+                <input value={form.state} onChange={setF("state")} placeholder="State" style={{ ...inputStyle, flex: 1 }} />
               </div>
+              <input value={form.pincode} onChange={setF("pincode")} placeholder="PIN code (6 digits) *"
+                inputMode="numeric" maxLength={6} style={{ ...inputStyle, width: 180 }} />
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button className="tap" onClick={saveNew} disabled={!formOk} style={{ flex: 1, padding: "11px 0",
+                borderRadius: 999, border: "none", fontFamily: "var(--font)", fontSize: 13, fontWeight: 800,
+                color: "#fff", cursor: formOk ? "pointer" : "not-allowed", opacity: formOk ? 1 : 0.55,
+                background: "linear-gradient(135deg,var(--brand-600),var(--brand-800))" }}>
+                Save & deliver here
+              </button>
+              <button className="tap" onClick={() => { setAdding(false); setForm(EMPTY_ADDR_FORM); }}
+                style={{ padding: "11px 16px", borderRadius: 999, border: "1.5px solid var(--hairline)", background: "#fff",
+                  color: "var(--ink-3)", fontFamily: "var(--font)", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                Cancel
+              </button>
             </div>
           </div>
-        </div>
+        )}
 
         {/* what CredArt knows (profile facts driving personalization) */}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 14 }}>
@@ -224,23 +321,50 @@ export function RewardsCheckout({ persona, cart: cartProp, performCheckout, onDo
   const merchandise = cart.filter((i) => i.category === "merchandise");
   const needsDelivery = merchandise.length > 0;
 
-  /* CMR: seeded fallback immediately, live backend profile if reachable. */
+  /* CMR: seeded fallback immediately, live backend profile if reachable.
+     All saved addresses are offered in the AddressStep (default first, pre-
+     selected); whichever one the user picks — or adds — is written back into
+     `cmr`, which every later step/screen reads for the delivery address. */
   const [cmr, setCmr] = React.useState(persona.cmr);
   const [cmrLive, setCmrLive] = React.useState(false);
+  const [addresses, setAddresses] = React.useState([{
+    label: persona.cmr.addressLabel, address: persona.cmr.address,
+    city: persona.cmr.city, state: persona.cmr.state, pincode: persona.cmr.pincode, source: "cmr",
+  }]);
+
+  function applyAddress(a) {
+    setCmr((c) => ({ ...c, addressLabel: a.label, address: a.address, city: a.city, state: a.state, pincode: a.pincode }));
+  }
+
+  /* A newly added address joins the list, becomes the delivery address, and is
+     saved back to the CMR profile best-effort (offline demo still works). */
+  function addAddress(a) {
+    const entry = { ...a, source: "new" };
+    setAddresses((list) => [...list, entry]);
+    applyAddress(entry);
+    api.saveAddress({
+      label: a.label, address_line1: a.address, city: a.city, state: a.state || undefined, pincode: a.pincode,
+    }, false, persona.id).catch(() => { /* offline — the address still works for this checkout */ });
+  }
+
   React.useEffect(() => {
     let alive = true;
     api.cmr(persona.id).then((d) => {
       if (!alive) return;
-      const addr = (d.addresses || []).find((a) => a.is_default) || (d.addresses || [])[0];
-      if (addr) {
-        setCmr((c) => ({
-          ...c,
-          addressLabel: addr.label || c.addressLabel,
-          address: [addr.address_line1, addr.address_line2].filter(Boolean).join(", "),
-          city: addr.city || c.city, state: addr.state || c.state, pincode: addr.pincode || c.pincode,
-          familySize: (d.preferences && d.preferences.family_size) || c.familySize,
-        }));
+      const list = (d.addresses || []).map((a) => ({
+        label: a.label || "Home",
+        address: [a.address_line1, a.address_line2].filter(Boolean).join(", "),
+        city: a.city || "", state: a.state || "", pincode: a.pincode || "",
+        isDefault: !!a.is_default, source: "cmr",
+      }));
+      if (list.length) {
+        list.sort((a, b) => (b.isDefault ? 1 : 0) - (a.isDefault ? 1 : 0)); // default first → autofill
+        setAddresses(list);
+        applyAddress(list[0]);
         setCmrLive(true);
+      }
+      if (d.preferences && d.preferences.family_size) {
+        setCmr((c) => ({ ...c, familySize: d.preferences.family_size }));
       }
     }).catch(() => { /* offline → seeded fallback stays */ });
     return () => { alive = false; };
@@ -327,6 +451,7 @@ export function RewardsCheckout({ persona, cart: cartProp, performCheckout, onDo
 
         {phase === "address" && (
           <AddressStep persona={persona} cmr={cmr} cmrLive={cmrLive} merchandise={merchandise}
+            addresses={addresses} onPick={applyAddress} onAdd={addAddress}
             onConfirm={() => setPhase("working")} onCancel={cancel} />
         )}
 
